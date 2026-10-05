@@ -20,9 +20,9 @@
 #  pragma system_header
 #endif // no system header
 
+#include <cuda/__type_traits/is_floating_point.h>
 #include <cuda/std/__type_traits/enable_if.h>
 #include <cuda/std/__type_traits/is_enum.h>
-#include <cuda/std/__type_traits/is_floating_point.h>
 #include <cuda/std/__type_traits/underlying_type.h>
 
 #include <cuda/std/__cccl/prologue.h>
@@ -60,7 +60,7 @@ _CCCL_API constexpr unsigned long long __convert_to_integral(unsigned long long 
 }
 
 template <typename _Fp>
-_CCCL_API constexpr enable_if_t<is_floating_point_v<_Fp>, long long> __convert_to_integral(_Fp __val)
+_CCCL_API constexpr enable_if_t<::cuda::is_floating_point_v<_Fp>, long long> __convert_to_integral(_Fp __val)
 {
   return __val;
 }
