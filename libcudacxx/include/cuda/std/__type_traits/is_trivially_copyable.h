@@ -29,14 +29,11 @@
 _CCCL_BEGIN_NAMESPACE_CUDA_STD
 
 template <class _Tp>
-inline constexpr bool __cccl_is_trivially_copyable_v = _CCCL_BUILTIN_IS_TRIVIALLY_COPYABLE(_Tp);
-
-template <class _Tp>
-struct _CCCL_TYPE_VISIBILITY_DEFAULT is_trivially_copyable : bool_constant<__cccl_is_trivially_copyable_v<_Tp>>
+struct _CCCL_TYPE_VISIBILITY_DEFAULT is_trivially_copyable : bool_constant<_CCCL_BUILTIN_IS_TRIVIALLY_COPYABLE(_Tp)>
 {};
 
 template <class _Tp>
-inline constexpr bool is_trivially_copyable_v = __cccl_is_trivially_copyable_v<_Tp>;
+inline constexpr bool is_trivially_copyable_v = _CCCL_BUILTIN_IS_TRIVIALLY_COPYABLE(_Tp);
 
 _CCCL_END_NAMESPACE_CUDA_STD
 
