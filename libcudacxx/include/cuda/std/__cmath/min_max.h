@@ -266,7 +266,7 @@ _CCCL_REQUIRES(__is_extended_arithmetic_v<_Tp>)
         }
 #endif // _CCCL_HAS_FLOAT128()
 #if _CCCL_USE_BUILTIN_FMIN()
-        if constexpr (if_floating_point_v<_Tp>) // NOLINT(cccl-prefer-cuda-traits)
+        if constexpr (is_floating_point_v<_Tp>) // NOLINT(cccl-prefer-cuda-traits)
         {
           // GCC builtins do not treat NaN properly
 #  if _CCCL_COMPILER(GCC)
