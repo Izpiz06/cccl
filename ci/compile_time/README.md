@@ -125,6 +125,12 @@ copy of each large trace. Their raw current and baseline traces remain available
 as artifacts and can be processed with `prepare_traces.py` after download. The
 wrapper still prepares Perfetto copies by default for interactive runs.
 
+MatX adds time tracing through `nvcc_time_trace.py`, a CUDA compiler launcher.
+The launcher passes the flag directly to NVCC and uses one internal compiler
+thread. CUDA 13.3 can fail to open temporary input files when time tracing is
+combined with parallel device-image compilation. Translation units still build
+in parallel using the configured build job count.
+
 PyTorch uses the CUDA 13.4/GCC 14 environment defined in
 `pytorch-devcontainer.json`: CUDA 13.3 PTXAS fails when reading its largest
 profiling traces. Its CI entry passes `-summary-jobs 1` because individual

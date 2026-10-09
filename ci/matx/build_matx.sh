@@ -114,10 +114,9 @@ if [[ "${CCCL_COMPILE_TIME_BENCH:-0}" == 1 ]]; then
   # outer configure command clears them on the command line.
   unset CMAKE_CUDA_COMPILER_LAUNCHER CMAKE_CXX_COMPILER_LAUNCHER CMAKE_C_COMPILER_LAUNCHER
   # MatX also copies CMAKE_CUDA_FLAGS into a CMake list without splitting it.
-  # Keep it to one argument and inject tracing directly into each nvcc call.
-  export NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:+${NVCC_APPEND_FLAGS} }--fdevice-time-trace=-"
+  # Keep it to one argument and add tracing through a compiler launcher.
   compile_time_cmake_args=(
-    "-DCMAKE_CUDA_COMPILER_LAUNCHER="
+    "-DCMAKE_CUDA_COMPILER_LAUNCHER=${cccl_repo}/ci/compile_time/nvcc_time_trace.py"
     "-DCMAKE_CXX_COMPILER_LAUNCHER="
   )
 fi

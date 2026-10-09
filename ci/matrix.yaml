@@ -122,12 +122,7 @@ compile_time:
   # Temporary PR coverage: run these weekly configurations without an opt-in tag.
   # Reset this list to empty before merging.
   override:
-    - *compile_time_pytorch
     - *compile_time_matx
-    - *compile_time_rapids_cudf
-    - *compile_time_rapids_cuvs
-    - *compile_time_rapids_cugraph
-    - *compile_time_rapids_cuopt
 
 # Compares the SASS of the CUB benchmarks before and after the change in a PR, and tells
 # the author to run the benchmarks when the generated code changed.
