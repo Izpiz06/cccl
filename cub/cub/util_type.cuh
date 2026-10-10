@@ -25,7 +25,7 @@
 #include <thrust/iterator/detail/any_assign.h>
 
 #include <cuda/__type_traits/is_floating_point.h>
-#include <cuda/std/__floating_point/cuda_fp_types.h>
+#include <cuda/std/__host_stdlib/ostream>
 #include <cuda/std/__iterator/iterator_traits.h>
 #include <cuda/std/__type_traits/conditional.h>
 #include <cuda/std/__type_traits/integral_constant.h>
@@ -37,10 +37,6 @@
 #include <cuda/std/__utility/declval.h>
 #include <cuda/std/cstdint>
 #include <cuda/std/limits>
-
-#if !_CCCL_COMPILER(NVRTC)
-#  include <ostream>
-#endif // !_CCCL_COMPILER(NVRTC)
 
 CUB_NAMESPACE_BEGIN
 
@@ -127,11 +123,11 @@ using non_void_value_t = typename non_void_value_impl<It, FallbackT>::type;
  *     Log2<8>::VALUE   // 3
  *     Log2<3>::VALUE   // 2
  */
-template <int N, int CURRENT_VAL = N, int COUNT = 0>
+template <int N, int CurrentVal = N, int COUNT = 0>
 struct Log2
 {
   /// Static logarithm value
-  static constexpr int VALUE = Log2<N, (CURRENT_VAL >> 1), COUNT + 1>::VALUE;
+  static constexpr int VALUE = Log2<N, (CurrentVal >> 1), COUNT + 1>::VALUE;
 };
 
 #  ifndef _CCCL_DOXYGEN_INVOKED // Do not document
@@ -249,7 +245,7 @@ private:
 };
 
 template <typename IterT>
-FutureValue(IterT) -> FutureValue<detail::it_value_t<IterT>, IterT>;
+_CCCL_DEDUCTION_GUIDE_ATTRIBUTES FutureValue(IterT) -> FutureValue<detail::it_value_t<IterT>, IterT>;
 
 namespace detail
 {
@@ -350,6 +346,7 @@ __CUB_ALIGN_BYTES(int4, 16)
 __CUB_ALIGN_BYTES(uint4, 16)
 __CUB_ALIGN_BYTES(float4, 16)
 _CCCL_SUPPRESS_DEPRECATED_PUSH
+_CCCL_SUPPRESS_DEPRECATED_NVRTC_DIAG
 __CUB_ALIGN_BYTES(long4, 16)
 __CUB_ALIGN_BYTES(ulong4, 16)
 _CCCL_SUPPRESS_DEPRECATED_POP
@@ -363,6 +360,7 @@ __CUB_ALIGN_BYTES(longlong2, 16)
 __CUB_ALIGN_BYTES(ulonglong2, 16)
 __CUB_ALIGN_BYTES(double2, 16)
 _CCCL_SUPPRESS_DEPRECATED_PUSH
+_CCCL_SUPPRESS_DEPRECATED_NVRTC_DIAG
 __CUB_ALIGN_BYTES(longlong4, 16)
 __CUB_ALIGN_BYTES(ulonglong4, 16)
 __CUB_ALIGN_BYTES(double4, 16)
@@ -485,7 +483,7 @@ template <typename T> struct UnitWord<const volatile T> : UnitWord<T> {};
  * \brief Exposes a member alias \p Type that names the corresponding CUDA vector type if one exists.  Otherwise \p
  * Type refers to the CubVector structure itself, which will wrap the corresponding \p x, \p y, etc. vector fields.
  */
-template <typename T, int vec_elements>
+template <typename T, int VecElements>
 struct CubVector
 {
   static_assert(!sizeof(T), "CubVector can only have 1-4 elements");
@@ -649,6 +647,7 @@ CUB_DEFINE_VECTOR_TYPE(signed char,        char)
 CUB_DEFINE_VECTOR_TYPE(short,              short)
 CUB_DEFINE_VECTOR_TYPE(int,                int)
 _CCCL_SUPPRESS_DEPRECATED_PUSH
+_CCCL_SUPPRESS_DEPRECATED_NVRTC_DIAG
 CUB_DEFINE_VECTOR_TYPE(long,               long)
 CUB_DEFINE_VECTOR_TYPE(long long,          longlong)
 _CCCL_SUPPRESS_DEPRECATED_POP
@@ -656,11 +655,13 @@ CUB_DEFINE_VECTOR_TYPE(unsigned char,      uchar)
 CUB_DEFINE_VECTOR_TYPE(unsigned short,     ushort)
 CUB_DEFINE_VECTOR_TYPE(unsigned int,       uint)
 _CCCL_SUPPRESS_DEPRECATED_PUSH
+_CCCL_SUPPRESS_DEPRECATED_NVRTC_DIAG
 CUB_DEFINE_VECTOR_TYPE(unsigned long,      ulong)
 CUB_DEFINE_VECTOR_TYPE(unsigned long long, ulonglong)
 _CCCL_SUPPRESS_DEPRECATED_POP
 CUB_DEFINE_VECTOR_TYPE(float,              float)
 _CCCL_SUPPRESS_DEPRECATED_PUSH
+_CCCL_SUPPRESS_DEPRECATED_NVRTC_DIAG
 CUB_DEFINE_VECTOR_TYPE(double,             double)
 _CCCL_SUPPRESS_DEPRECATED_POP
 CUB_DEFINE_VECTOR_TYPE(bool,               uchar)
@@ -686,7 +687,7 @@ struct Uninitialized
   static_assert(DATA_SIZE % WORDS == 0);
 
   /// Backing storage
-  DeviceWord storage[WORDS];
+  alignas(T) DeviceWord storage[WORDS];
 
   /// Alias
   _CCCL_HOST_DEVICE _CCCL_FORCEINLINE T& Alias()
@@ -698,17 +699,17 @@ struct Uninitialized
 /**
  * \brief A key identifier paired with a corresponding value
  */
-template <typename _Key, typename _Value>
+template <typename KeyT, typename ValueT>
 struct KeyValuePair
 {
-  using Key   = _Key; ///< Key data type
-  using Value = _Value; ///< Value data type
+  using Key   = KeyT; ///< Key data type
+  using Value = ValueT; ///< Value data type
 
   Key key; ///< Item key
   Value value; ///< Item value
 
   /// Constructor
-  _CCCL_HOST_DEVICE _CCCL_FORCEINLINE KeyValuePair() {}
+  _CCCL_FORCEINLINE KeyValuePair() = default;
 
   /// Constructor
   _CCCL_HOST_DEVICE _CCCL_FORCEINLINE KeyValuePair(Key const& key, Value const& value)
@@ -728,12 +729,12 @@ struct KeyValuePair
     return (value != b.value) || (key != b.key);
   }
 
-#  if !_CCCL_COMPILER(NVRTC)
+#  if _CCCL_HOSTED()
   friend ::std::ostream& operator<<(::std::ostream& os, const KeyValuePair& pair)
   {
     return os << '(' << pair.key << ',' << pair.value << ')';
   }
-#  endif // !_CCCL_COMPILER(NVRTC)
+#  endif // _CCCL_HOSTED()
 };
 
 /**
@@ -819,7 +820,7 @@ struct BinaryOpHasIdxParam<T,
 /**
  * \brief Basic type traits categories
  */
-enum Category
+enum Category // NOLINT(cppcoreguidelines-use-enum-class)
 {
   NOT_A_NUMBER,
   SIGNED_INTEGER,
@@ -831,25 +832,25 @@ namespace detail
 {
 struct is_primitive_impl;
 
-// case for _CATEGORY = NOT_A_NUMBER, or _PRIMITIVE = false
-template <Category _CATEGORY, bool _PRIMITIVE, typename _UnsignedBits, typename T>
+// case for Kind = NOT_A_NUMBER, or Primitive = false
+template <Category Kind, bool Primitive, typename UnsignedBitsT, typename T>
 struct BaseTraits
 {
 private:
   friend struct is_primitive_impl;
 
-  static constexpr bool is_primitive = _PRIMITIVE;
+  static constexpr bool is_primitive = Primitive;
 };
 
-template <typename _UnsignedBits, typename T>
-struct BaseTraits<UNSIGNED_INTEGER, true, _UnsignedBits, T>
+template <typename UnsignedBitsT, typename T>
+struct BaseTraits<UNSIGNED_INTEGER, true, UnsignedBitsT, T>
 {
-  static_assert(sizeof(_UnsignedBits) == sizeof(T),
+  static_assert(sizeof(UnsignedBitsT) == sizeof(T),
                 "The size of the unsigned type holding the bits of T must be the same as T");
   static_assert(::cuda::std::numeric_limits<T>::is_specialized,
                 "Please also specialize cuda::std::numeric_limits for T");
 
-  using UnsignedBits                       = _UnsignedBits;
+  using UnsignedBits                       = UnsignedBitsT;
   static constexpr UnsignedBits LOWEST_KEY = UnsignedBits(0);
   static constexpr UnsignedBits MAX_KEY    = UnsignedBits(-1);
 
@@ -888,15 +889,15 @@ private:
   static constexpr bool is_primitive = true;
 };
 
-template <typename _UnsignedBits, typename T>
-struct BaseTraits<SIGNED_INTEGER, true, _UnsignedBits, T>
+template <typename UnsignedBitsT, typename T>
+struct BaseTraits<SIGNED_INTEGER, true, UnsignedBitsT, T>
 {
-  static_assert(sizeof(_UnsignedBits) == sizeof(T),
+  static_assert(sizeof(UnsignedBitsT) == sizeof(T),
                 "The size of the unsigned type holding the bits of T must be the same as T");
   static_assert(::cuda::std::numeric_limits<T>::is_specialized,
                 "Please also specialize cuda::std::numeric_limits for T");
 
-  using UnsignedBits = _UnsignedBits;
+  using UnsignedBits = UnsignedBitsT;
 
   static constexpr UnsignedBits HIGH_BIT   = UnsignedBits(1) << ((sizeof(UnsignedBits) * 8) - 1);
   static constexpr UnsignedBits LOWEST_KEY = HIGH_BIT;
@@ -933,17 +934,17 @@ private:
   static constexpr bool is_primitive = true;
 };
 
-template <typename _UnsignedBits, typename T>
-struct BaseTraits<FLOATING_POINT, true, _UnsignedBits, T>
+template <typename UnsignedBitsT, typename T>
+struct BaseTraits<FLOATING_POINT, true, UnsignedBitsT, T>
 {
-  static_assert(sizeof(_UnsignedBits) == sizeof(T),
+  static_assert(sizeof(UnsignedBitsT) == sizeof(T),
                 "The size of the unsigned type holding the bits of T must be the same as T");
   static_assert(::cuda::std::numeric_limits<T>::is_specialized,
                 "Please also specialize cuda::std::numeric_limits for T");
   static_assert(::cuda::is_floating_point<T>::value, "Please also specialize cuda::is_floating_point for T");
   static_assert(::cuda::is_floating_point_v<T>, "Please also specialize cuda::is_floating_point_v for T");
 
-  using UnsignedBits = _UnsignedBits;
+  using UnsignedBits = UnsignedBitsT;
 
   static constexpr UnsignedBits HIGH_BIT   = UnsignedBits(1) << ((sizeof(UnsignedBits) * 8) - 1);
   static constexpr UnsignedBits LOWEST_KEY = UnsignedBits(-1);
@@ -951,13 +952,13 @@ struct BaseTraits<FLOATING_POINT, true, _UnsignedBits, T>
 
   static _CCCL_HOST_DEVICE _CCCL_FORCEINLINE UnsignedBits TwiddleIn(UnsignedBits key)
   {
-    UnsignedBits mask = (key & HIGH_BIT) ? UnsignedBits(-1) : HIGH_BIT;
+    const UnsignedBits mask = (key & HIGH_BIT) ? UnsignedBits(-1) : HIGH_BIT;
     return key ^ mask;
   };
 
   static _CCCL_HOST_DEVICE _CCCL_FORCEINLINE UnsignedBits TwiddleOut(UnsignedBits key)
   {
-    UnsignedBits mask = (key & HIGH_BIT) ? HIGH_BIT : UnsignedBits(-1);
+    const UnsignedBits mask = (key & HIGH_BIT) ? HIGH_BIT : UnsignedBits(-1);
     return key ^ mask;
   };
 
@@ -983,8 +984,8 @@ private:
 
 //! Use this class as base when specializing \ref NumericTraits for primitive signed/unsigned integers or floating-point
 //! types.
-template <Category _CATEGORY, bool _PRIMITIVE, typename _UnsignedBits, typename T>
-using BaseTraits = detail::BaseTraits<_CATEGORY, _PRIMITIVE, _UnsignedBits, T>;
+template <Category Kind, bool Primitive, typename UnsignedBitsT, typename T>
+using BaseTraits = detail::BaseTraits<Kind, Primitive, UnsignedBitsT, T>;
 
 //! Numeric type traits for radix sort key operations, decoupled lookback and tuning. You can specialize this template
 //! for your own types if:
@@ -993,7 +994,7 @@ using BaseTraits = detail::BaseTraits<_CATEGORY, _PRIMITIVE, _UnsignedBits, T>;
 //! * The arithmetic throughput of the type is similar to other built-in types of the same size
 //! For other types, if you want to use them with radix sort, please use the decomposer interface of the radix sort.
 // clang-format off
-template <typename T> struct NumericTraits :            BaseTraits<NOT_A_NUMBER, false, T, T> {};
+template <typename T, typename = T> struct NumericTraits :            BaseTraits<NOT_A_NUMBER, false, T, T> {};
 
 template <> struct NumericTraits<NullType> :            BaseTraits<NOT_A_NUMBER, false, NullType, NullType> {};
 
@@ -1096,15 +1097,15 @@ private:
 template <> struct NumericTraits<float> :               BaseTraits<FLOATING_POINT, true, unsigned int, float> {};
 template <> struct NumericTraits<double> :              BaseTraits<FLOATING_POINT, true, unsigned long long, double> {};
 #  if _CCCL_HAS_NVFP16()
-    template <> struct NumericTraits<__half> :          BaseTraits<FLOATING_POINT, true, unsigned short, __half> {};
+    template <typename T> struct NumericTraits<__half, T> :          BaseTraits<FLOATING_POINT, true, unsigned short, T> {};
 #  endif // _CCCL_HAS_NVFP16()
 #  if _CCCL_HAS_NVBF16()
-    template <> struct NumericTraits<__nv_bfloat16> :   BaseTraits<FLOATING_POINT, true, unsigned short, __nv_bfloat16> {};
+    template <typename T> struct NumericTraits<__nv_bfloat16, T> :   BaseTraits<FLOATING_POINT, true, unsigned short, T> {};
 #  endif // _CCCL_HAS_NVBF16()
 
 #if _CCCL_HAS_NVFP8()
-    template <> struct NumericTraits<__nv_fp8_e4m3> :   BaseTraits<FLOATING_POINT, true, __nv_fp8_storage_t, __nv_fp8_e4m3> {};
-    template <> struct NumericTraits<__nv_fp8_e5m2> :   BaseTraits<FLOATING_POINT, true, __nv_fp8_storage_t, __nv_fp8_e5m2> {};
+    template <typename T> struct NumericTraits<__nv_fp8_e4m3, T> :   BaseTraits<FLOATING_POINT, true, unsigned char, T> {};
+    template <typename T> struct NumericTraits<__nv_fp8_e5m2, T> :   BaseTraits<FLOATING_POINT, true, unsigned char, T> {};
 #endif // _CCCL_HAS_NVFP8()
 
 template <> struct NumericTraits<bool> :                BaseTraits<UNSIGNED_INTEGER, true, typename UnitWord<bool>::VolatileWord, bool> {};

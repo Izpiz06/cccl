@@ -21,23 +21,21 @@
 #  pragma system_header
 #endif // no system header
 
-#if !_CCCL_COMPILER(NVRTC)
+#if _CCCL_HOSTED()
 
 #  include <cuda/__nvtx/nvtx.h>
 #  include <cuda/std/__algorithm/remove.h>
 #  include <cuda/std/__concepts/concept_macros.h>
-#  include <cuda/std/__execution/policy.h>
-#  include <cuda/std/__iterator/concepts.h>
 #  include <cuda/std/__iterator/distance.h>
 #  include <cuda/std/__iterator/iterator_traits.h>
 #  include <cuda/std/__pstl/dispatch.h>
 #  include <cuda/std/__type_traits/always_false.h>
-#  include <cuda/std/__type_traits/integral_constant.h>
 #  include <cuda/std/__type_traits/is_execution_policy.h>
+#  include <cuda/std/__type_traits/is_nothrow_copy_constructible.h> // IWYU pragma: keep
 #  include <cuda/std/__utility/move.h>
 
 #  if _CCCL_HAS_BACKEND_CUDA()
-#    include <cuda/std/__pstl/cuda/remove_if.h>
+#    include <cuda/std/__pstl/cuda/remove_if.h> // IWYU pragma: keep
 #  endif // _CCCL_HAS_BACKEND_CUDA()
 
 #  include <cuda/std/__cccl/prologue.h>
@@ -45,6 +43,11 @@
 _CCCL_BEGIN_NAMESPACE_CUDA_STD
 
 _CCCL_BEGIN_NAMESPACE_ARCH_DEPENDENT
+
+_CCCL_DIAG_PUSH
+_CCCL_DIAG_SUPPRESS_MSVC(4018) // signed/unsigned mismatch
+_CCCL_DIAG_SUPPRESS_GCC("-Wsign-compare")
+_CCCL_DIAG_SUPPRESS_CLANG("-Wsign-compare")
 
 template <class _Tp>
 struct __remove_compare_not_eq
@@ -62,6 +65,8 @@ struct __remove_compare_not_eq
     return !(__val_ == __rhs);
   }
 };
+
+_CCCL_DIAG_POP
 
 _CCCL_TEMPLATE(class _Policy, class _InputIterator, class _Tp)
 _CCCL_REQUIRES(__has_forward_traversal<_InputIterator> _CCCL_AND is_execution_policy_v<_Policy>)
@@ -95,6 +100,6 @@ _CCCL_END_NAMESPACE_CUDA_STD
 
 #  include <cuda/std/__cccl/epilogue.h>
 
-#endif // !_CCCL_COMPILER(NVRTC)
+#endif // _CCCL_HOSTED()
 
 #endif // _CUDA_STD___PSTL_REMOVE_H

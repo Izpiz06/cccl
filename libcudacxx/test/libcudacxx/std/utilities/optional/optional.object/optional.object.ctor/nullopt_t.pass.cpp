@@ -27,7 +27,7 @@ TEST_FUNC constexpr void test()
 {
   static_assert(cuda::std::is_nothrow_constructible<optional<T>, nullopt_t&>::value);
   static_assert(
-    cuda::std::is_trivially_destructible<optional<T>>::value == cuda::std::is_trivially_destructible<T>::value, "");
+    cuda::std::is_trivially_destructible<optional<T>>::value == cuda::std::is_trivially_destructible<T>::value);
   {
     optional<T> opt{nullopt};
     assert(static_cast<bool>(opt) == false);
@@ -48,9 +48,7 @@ TEST_FUNC constexpr bool test()
   test<NonTrivialTypes::NoCtors>();
   test<NonConstexprTypes::NoCtors>();
 
-#ifdef CCCL_ENABLE_OPTIONAL_REF
   test<int&>();
-#endif // CCCL_ENABLE_OPTIONAL_REF
 
   return true;
 }

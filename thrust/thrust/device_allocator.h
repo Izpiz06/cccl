@@ -67,8 +67,9 @@ public:
       : m_upstream(upstream)
   {}
 
-  [[nodiscard]] _CCCL_HOST pointer
-  do_allocate(std::size_t bytes, std::size_t alignment = THRUST_MR_DEFAULT_ALIGNMENT) override
+  [[nodiscard]] _CCCL_HOST pointer do_allocate( // NOLINT(google-default-arguments)
+    std::size_t bytes,
+    std::size_t alignment = THRUST_MR_DEFAULT_ALIGNMENT) override
   {
     return pointer(m_upstream->do_allocate(bytes, alignment).get());
   }
@@ -120,7 +121,7 @@ public:
   };
 
   /*! Default constructor has no effect. */
-  _CCCL_HOST_DEVICE device_allocator() {}
+  device_allocator() = default;
 
   /*! Copy constructor has no effect. */
   _CCCL_HOST_DEVICE device_allocator(const device_allocator& other)
@@ -136,7 +137,7 @@ public:
   device_allocator& operator=(const device_allocator&) = default;
 
   /*! Destructor has no effect. */
-  _CCCL_HOST_DEVICE ~device_allocator() {}
+  ~device_allocator() = default;
 };
 
 /*! \} // allocators

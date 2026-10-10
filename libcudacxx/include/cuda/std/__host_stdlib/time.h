@@ -21,8 +21,10 @@
 #  pragma system_header
 #endif // no system header
 
-#if !_CCCL_COMPILER(NVRTC)
+#if _CCCL_HOSTED()
+// IWYU pragma: begin_exports
 #  include <time.h>
+// IWYU pragma: end_exports
 
 // Standard C++ library comes with it's own <time.h> C++ compatible header. However, if the include paths are jumbled,
 // it might happen that the original C <time.h> is found first. This is a problem because C headers define many of the
@@ -34,6 +36,6 @@
       "libcu++ requires the C++ compatibility <time.h> header, not the C <time.h> header. Please, check your include paths."
 #  endif // math functions defined as macros
 
-#endif // !_CCCL_COMPILER(NVRTC)
+#endif // _CCCL_HOSTED()
 
 #endif // _CUDA_STD___HOST_STDLIB_TIME_H

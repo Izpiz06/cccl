@@ -16,12 +16,10 @@ function(cub_add_header_test label definitions)
     ${headertest_target}
     cub
     GLOBS "cub/*.cuh"
-    # These headers have additional dependencies and strict compiler reqs.
-    # They're effectively an implementation detail of cccl.c.parallel and
-    # have their own testing.
-    EXCLUDES #
-      "cub/detail/*ptx-json*"
-      "cub/detail/ptx-json/*.cuh"
+    PER_HEADER_DEFINES
+      DEFINE
+      CCCL_DISABLE_CUB_UMBRELLA_HEADER_WARNING
+      "cub/cub\\.cuh"
   )
   cub_configure_cuda_target(${headertest_target} RDC ${CUB_FORCE_RDC})
   target_link_libraries(${headertest_target} PUBLIC cub.compiler_interface)

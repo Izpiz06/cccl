@@ -5,6 +5,8 @@
 
 #include <cuda/std/cassert>
 
+#include <iostream>
+
 #include "include/timer.h"
 
 // This examples compares sorting performance using Array of Structures (AoS)
@@ -59,7 +61,7 @@ void initialize_keys(thrust::device_vector<MyStruct>& structures)
 
 int main()
 {
-  size_t N = 2 * 1024 * 1024;
+  const size_t N = 2 * 1024 * 1024;
 
   // Sort Key-Value pairs using Array of Structures (AoS) storage
   {

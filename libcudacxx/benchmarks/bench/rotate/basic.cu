@@ -1,6 +1,6 @@
 //===----------------------------------------------------------------------===//
 //
-// Part of CUDA Experimental in CUDA C++ Core Libraries,
+// Part of libcu++, the C++ Standard Library for your entire system,
 // under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -21,7 +21,7 @@ static void basic(nvbench::state& state, nvbench::type_list<T>)
 {
   const auto elements       = static_cast<std::size_t>(state.get_int64("Elements"));
   const auto midpoint_float = state.get_float64("MidpointAt");
-  const auto midpoint       = static_cast<std::size_t>(elements * midpoint_float);
+  const auto midpoint       = static_cast<std::size_t>(static_cast<double>(elements) * midpoint_float);
 
   thrust::device_vector<T> in = generate(elements, bit_entropy::_1_000);
 

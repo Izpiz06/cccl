@@ -106,6 +106,11 @@ _create_rapids_cmake_override_json() {
     cmake_args+=("-DBUILD_SHARED_LIBS=ON");
     cmake_args+=("-DRAFT_COMPILE_LIBRARY=ON");
 
+    # RAPIDS repos include <cub/cub.cuh> directly and build with -Werror, so disable CUB's
+    # compile-time warning about including the umbrella header to avoid breaking their builds.
+    cmake_args+=("-DCMAKE_CXX_FLAGS=-DCCCL_DISABLE_CUB_UMBRELLA_HEADER_WARNING");
+    cmake_args+=("-DCMAKE_CUDA_FLAGS=-DCCCL_DISABLE_CUB_UMBRELLA_HEADER_WARNING");
+
     # Tell rapids-cmake to use custom CCCL and cuCollections forks
     cmake_args+=("-Drapids-cmake-branch=${rapids_cmake_tag}");
     cmake_args+=("-Drapids-cmake-repo=${rapids_cmake_upstream}/rapids-cmake");
@@ -141,6 +146,6 @@ _run_post_create_command() {
     clone-all -j "$(nproc --all)" -v -q --clone-upstream --single-branch --shallow-submodules --no-update-env;
 }
 
-if [ "$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]}-1]}")" = post-create-command.sh ]; then
+if [[ "$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]}-1]}")" = post-create-command.sh ]]; then
     _run_post_create_command;
 fi

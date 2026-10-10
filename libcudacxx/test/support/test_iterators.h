@@ -47,7 +47,7 @@ public:
 
   template <class U, class = typename cuda::std::enable_if<cuda::std::is_default_constructible<U>::value>::type>
   TEST_FUNC constexpr cpp17_output_iterator(cpp17_output_iterator<U>&& u)
-      : it_(u.it_)
+      : it_(cuda::std::move(u.it_))
   {
     u.it_ = U();
   }
@@ -106,7 +106,7 @@ public:
 
   template <class U, class T, class = typename cuda::std::enable_if<cuda::std::is_default_constructible<U>::value>::type>
   TEST_FUNC constexpr cpp17_input_iterator(cpp17_input_iterator<U, T>&& u)
-      : it_(u.it_)
+      : it_(cuda::std::move(u.it_))
   {
     u.it_ = U();
   }
@@ -176,7 +176,7 @@ public:
 
   template <class U, class = typename cuda::std::enable_if<cuda::std::is_default_constructible<U>::value>::type>
   TEST_FUNC constexpr forward_iterator(forward_iterator<U>&& other)
-      : it_(other.it_)
+      : it_(cuda::std::move(other.it_))
   {
     other.it_ = U();
   }
@@ -249,7 +249,7 @@ public:
 
   template <class U, class = typename cuda::std::enable_if<cuda::std::is_default_constructible<U>::value>::type>
   TEST_FUNC constexpr bidirectional_iterator(bidirectional_iterator<U>&& u)
-      : it_(u.it_)
+      : it_(cuda::std::move(u.it_))
   {
     u.it_ = U();
   }
@@ -326,7 +326,7 @@ public:
 
   template <class U, class = typename cuda::std::enable_if<cuda::std::is_default_constructible<U>::value>::type>
   TEST_FUNC constexpr random_access_iterator(random_access_iterator<U>&& u)
-      : it_(u.it_)
+      : it_(cuda::std::move(u.it_))
   {
     u.it_ = U();
   }
@@ -424,6 +424,51 @@ public:
 };
 static_assert(cuda::std::random_access_iterator<random_access_iterator<int*>>);
 
+template <class Base = int*>
+struct common_input_iterator
+{
+  Base it_;
+
+  using value_type       = int;
+  using difference_type  = cuda::std::intptr_t;
+  using iterator_concept = cuda::std::input_iterator_tag;
+
+  constexpr common_input_iterator() = default;
+  TEST_FUNC constexpr explicit common_input_iterator(Base it)
+      : it_(it)
+  {}
+
+  TEST_FUNC constexpr common_input_iterator& operator++()
+  {
+    ++it_;
+    return *this;
+  }
+  TEST_FUNC constexpr void operator++(int)
+  {
+    ++it_;
+  }
+
+  TEST_FUNC constexpr decltype(auto) operator*() const
+  {
+    return *it_;
+  }
+
+  TEST_FUNC friend constexpr bool operator==(common_input_iterator const& lhs, common_input_iterator const& rhs)
+  {
+    return lhs.it_ == rhs.it_;
+  }
+
+  TEST_FUNC friend constexpr bool operator!=(common_input_iterator const& lhs, common_input_iterator const& rhs)
+  {
+    return lhs.it_ != rhs.it_;
+  }
+
+  TEST_FUNC friend constexpr Base base(const common_input_iterator& i)
+  {
+    return i.it_;
+  }
+};
+
 template <class It>
 class cpp20_random_access_iterator
 {
@@ -452,7 +497,7 @@ public:
 
   template <class U>
   TEST_FUNC constexpr cpp20_random_access_iterator(cpp20_random_access_iterator<U>&& u)
-      : it_(u.it_)
+      : it_(cuda::std::move(u.it_))
   {
     u.it_ = U();
   }
@@ -594,7 +639,7 @@ public:
             class = cuda::std::enable_if_t<cuda::std::is_constructible<It, U>::value
                                            && cuda::std::is_default_constructible<U>::value>>
   TEST_FUNC constexpr contiguous_iterator(contiguous_iterator<U>&& u)
-      : it_(u.it_)
+      : it_(cuda::std::move(u.it_))
   {
     u.it_ = U();
   }
@@ -736,7 +781,7 @@ public:
 
   template <class U, class = typename cuda::std::enable_if<cuda::std::is_default_constructible<U>::value>::type>
   TEST_FUNC constexpr three_way_contiguous_iterator(three_way_contiguous_iterator<U>&& u)
-      : it_(u.it_)
+      : it_(cuda::std::move(u.it_))
   {
     u.it_ = U();
   }
@@ -834,7 +879,7 @@ struct ThrowingIterator
   using pointer           = const T*;
   using reference         = const T&;
 
-  enum ThrowingAction
+  enum class ThrowingAction
   {
     TAIncrement,
     TADecrement,
@@ -847,11 +892,11 @@ struct ThrowingIterator
       : begin_(nullptr)
       , end_(nullptr)
       , current_(nullptr)
-      , action_(TADereference)
+      , action_(ThrowingAction::TADereference)
       , index_(0)
   {}
   TEST_FUNC constexpr explicit ThrowingIterator(
-    const T* first, const T* last, int index = 0, ThrowingAction action = TADereference)
+    const T* first, const T* last, int index = 0, ThrowingAction action = ThrowingAction::TADereference)
       : begin_(first)
       , end_(last)
       , current_(first)
@@ -866,9 +911,11 @@ struct ThrowingIterator
       , index_(rhs.index_)
   {}
 
+  // Irrelevant for testing code
+  // NOLINTNEXTLINE(bugprone-unhandled-self-assignment)
   TEST_FUNC constexpr ThrowingIterator& operator=(const ThrowingIterator& rhs)
   {
-    if (action_ == TAAssignment && --index_ < 0)
+    if (action_ == ThrowingAction::TAAssignment && --index_ < 0)
     {
       assert(false);
     }
@@ -882,7 +929,7 @@ struct ThrowingIterator
 
   TEST_FUNC constexpr reference operator*() const
   {
-    if (action_ == TADereference && --index_ < 0)
+    if (action_ == ThrowingAction::TADereference && --index_ < 0)
     {
       assert(false);
     }
@@ -891,7 +938,7 @@ struct ThrowingIterator
 
   TEST_FUNC constexpr ThrowingIterator& operator++()
   {
-    if (action_ == TAIncrement && --index_ < 0)
+    if (action_ == ThrowingAction::TAIncrement && --index_ < 0)
     {
       assert(false);
     }
@@ -908,7 +955,7 @@ struct ThrowingIterator
 
   TEST_FUNC constexpr ThrowingIterator& operator--()
   {
-    if (action_ == TADecrement && --index_ < 0)
+    if (action_ == ThrowingAction::TADecrement && --index_ < 0)
     {
       assert(false);
     }
@@ -925,7 +972,7 @@ struct ThrowingIterator
 
   TEST_FUNC constexpr friend bool operator==(const ThrowingIterator& a, const ThrowingIterator& b)
   {
-    if (a.action_ == TAComparison && --a.index_ < 0)
+    if (a.action_ == ThrowingAction::TAComparison && --a.index_ < 0)
     {
       assert(false);
     }
@@ -983,13 +1030,7 @@ struct NonThrowingIterator
       , current_(rhs.current_)
   {}
 
-  TEST_FUNC NonThrowingIterator& operator=(const NonThrowingIterator& rhs) noexcept
-  {
-    begin_   = rhs.begin_;
-    end_     = rhs.end_;
-    current_ = rhs.current_;
-    return *this;
-  }
+  NonThrowingIterator& operator=(const NonThrowingIterator& rhs) noexcept = default;
 
   TEST_FUNC reference operator*() const noexcept
   {
@@ -1049,6 +1090,70 @@ private:
   const T* begin_;
   const T* end_;
   const T* current_;
+};
+
+// Bidirectional iterator whose copy constructor is potentially throwing when `NoThrowCopy` is false.
+template <bool NoThrowCopy>
+struct CopyMayThrowIterator
+{
+  using iterator_category = cuda::std::bidirectional_iterator_tag;
+  using value_type        = int;
+  using difference_type   = cuda::std::ptrdiff_t;
+  using pointer           = int*;
+  using reference         = int&;
+
+  int* ptr_ = nullptr;
+
+  constexpr CopyMayThrowIterator() noexcept = default;
+  TEST_FUNC constexpr explicit CopyMayThrowIterator(int* ptr) noexcept
+      : ptr_(ptr)
+  {}
+  // The exception specification depends on NoThrowCopy, so this copy cannot be defaulted.
+  // NOLINTBEGIN(modernize-use-equals-default)
+  TEST_FUNC constexpr CopyMayThrowIterator(const CopyMayThrowIterator& other) noexcept(NoThrowCopy)
+      : ptr_(other.ptr_)
+  {}
+  // NOLINTEND(modernize-use-equals-default)
+  constexpr CopyMayThrowIterator& operator=(const CopyMayThrowIterator&) noexcept = default;
+
+  TEST_FUNC constexpr reference operator*() const noexcept
+  {
+    return *ptr_;
+  }
+  TEST_FUNC constexpr CopyMayThrowIterator& operator++() noexcept
+  {
+    ++ptr_;
+    return *this;
+  }
+  TEST_FUNC constexpr CopyMayThrowIterator operator++(int) noexcept(NoThrowCopy)
+  {
+    CopyMayThrowIterator tmp(*this);
+    ++ptr_;
+    return tmp;
+  }
+  TEST_FUNC constexpr CopyMayThrowIterator& operator--() noexcept
+  {
+    --ptr_;
+    return *this;
+  }
+  TEST_FUNC constexpr CopyMayThrowIterator operator--(int) noexcept(NoThrowCopy)
+  {
+    CopyMayThrowIterator tmp(*this);
+    --ptr_;
+    return tmp;
+  }
+
+  TEST_FUNC friend constexpr bool operator==(const CopyMayThrowIterator& x, const CopyMayThrowIterator& y) noexcept
+  {
+    return x.ptr_ == y.ptr_;
+  }
+  TEST_FUNC friend constexpr bool operator!=(const CopyMayThrowIterator& x, const CopyMayThrowIterator& y) noexcept
+  {
+    return x.ptr_ != y.ptr_;
+  }
+
+  template <class T2>
+  void operator,(T2 const&) = delete;
 };
 
 template <class It>
@@ -1356,19 +1461,23 @@ public:
   TEST_FUNC constexpr explicit sentinel_wrapper(const It& it)
       : base_(base(it))
   {}
+  _CCCL_EXEC_CHECK_DISABLE
   TEST_FUNC friend constexpr bool operator==(const sentinel_wrapper& s, const It& i)
   {
     return s.base_ == base(i);
   }
 #if TEST_STD_VER < 2020
+  _CCCL_EXEC_CHECK_DISABLE
   TEST_FUNC friend constexpr bool operator==(const It& i, const sentinel_wrapper& s)
   {
     return s.base_ == base(i);
   }
+  _CCCL_EXEC_CHECK_DISABLE
   TEST_FUNC friend constexpr bool operator!=(const sentinel_wrapper& s, const It& i)
   {
     return s.base_ != base(i);
   }
+  _CCCL_EXEC_CHECK_DISABLE
   TEST_FUNC friend constexpr bool operator!=(const It& i, const sentinel_wrapper& s)
   {
     return s.base_ != base(i);
@@ -1634,20 +1743,24 @@ struct Proxy
 
   Proxy(const Proxy&) = default;
 
+  // NOLINTBEGIN(bugprone-forwarding-reference-overload)
   _CCCL_TEMPLATE(class U)
   _CCCL_REQUIRES(cuda::std::constructible_from<T, U&&>)
   TEST_FUNC constexpr Proxy(U&& u)
       : data{cuda::std::forward<U>(u)}
   {}
+  // NOLINTEND(bugprone-forwarding-reference-overload)
 
   // This constructor covers conversion from cvref of Proxy<U>, including non-const/const versions of copy/move
   // constructor
+  // NOLINTBEGIN(bugprone-forwarding-reference-overload)
   _CCCL_TEMPLATE(class Other)
   _CCCL_REQUIRES((IsProxy<cuda::std::decay_t<Other>>
                   && cuda::std::constructible_from<T, decltype(cuda::std::declval<Other>().getData())>) )
   TEST_FUNC constexpr Proxy(Other&& other)
       : data{cuda::std::forward<Other>(other).getData()}
   {}
+  // NOLINTEND(bugprone-forwarding-reference-overload)
 
   _CCCL_TEMPLATE(class Other)
   _CCCL_REQUIRES((IsProxy<cuda::std::decay_t<Other>>
@@ -1803,11 +1916,13 @@ struct ProxyIterator : ProxyIteratorBase<Base>
       : base_{cuda::std::move(base)}
   {}
 
+  // NOLINTBEGIN(bugprone-forwarding-reference-overload)
   _CCCL_TEMPLATE(class T)
   _CCCL_REQUIRES(cuda::std::constructible_from<Base, T&&>)
   TEST_FUNC constexpr ProxyIterator(T&& t)
       : base_{cuda::std::forward<T>(t)}
   {}
+  // NOLINTEND(bugprone-forwarding-reference-overload)
 
   TEST_FUNC friend constexpr decltype(auto) base(const ProxyIterator& p)
   {
@@ -2029,7 +2144,7 @@ struct ProxyRange
 
 template <cuda::std::ranges::input_range R>
   requires cuda::std::ranges::viewable_range<R&&>
-ProxyRange(R&&) -> ProxyRange<cuda::std::views::all_t<R&&>>;
+_CCCL_DEDUCTION_GUIDE_ATTRIBUTES ProxyRange(R&&) -> ProxyRange<cuda::std::views::all_t<R&&>>;
 #endif // !defined(_LIBCUDACXX_HAS_NO_INCOMPLETE_RANGES)
 
 namespace types
@@ -2066,7 +2181,7 @@ public:
   using pointer           = int*;
   using reference         = int&;
 
-  TEST_FUNC constexpr advance_only_iterator() {}
+  constexpr advance_only_iterator() = default;
   TEST_FUNC constexpr advance_only_iterator(int* iter)
       : iter_(iter)
   {}
@@ -2153,5 +2268,263 @@ public:
   }
 };
 static_assert(cuda::std::random_access_iterator<advance_only_iterator>);
+
+#if !TEST_COMPILER(NVRTC)
+template <class It>
+class host_only_iterator
+{
+  It it_;
+
+  template <class U>
+  friend class host_only_iterator;
+
+public:
+  using iterator_category = cuda::std::random_access_iterator_tag;
+  using value_type        = typename cuda::std::iterator_traits<It>::value_type;
+  using difference_type   = typename cuda::std::iterator_traits<It>::difference_type;
+  using pointer           = It;
+  using reference         = typename cuda::std::iterator_traits<It>::reference;
+
+  constexpr host_only_iterator()
+      : it_()
+  {}
+  constexpr explicit host_only_iterator(It it)
+      : it_(it)
+  {}
+
+  template <class U>
+  constexpr host_only_iterator(const host_only_iterator<U>& u)
+      : it_(u.it_)
+  {}
+
+  template <class U, class = typename cuda::std::enable_if<cuda::std::is_default_constructible<U>::value>::type>
+  constexpr host_only_iterator(host_only_iterator<U>&& u)
+      : it_(cuda::std::move(u.it_))
+  {
+    u.it_ = U();
+  }
+
+  constexpr reference operator*() const
+  {
+    return *it_;
+  }
+  constexpr reference operator[](difference_type n) const
+  {
+    return it_[n];
+  }
+
+  constexpr host_only_iterator& operator++()
+  {
+    ++it_;
+    return *this;
+  }
+  constexpr host_only_iterator& operator--()
+  {
+    --it_;
+    return *this;
+  }
+  constexpr host_only_iterator operator++(int)
+  {
+    return host_only_iterator(it_++);
+  }
+  constexpr host_only_iterator operator--(int)
+  {
+    return host_only_iterator(it_--);
+  }
+
+  constexpr host_only_iterator& operator+=(difference_type n)
+  {
+    it_ += n;
+    return *this;
+  }
+  constexpr host_only_iterator& operator-=(difference_type n)
+  {
+    it_ -= n;
+    return *this;
+  }
+  friend constexpr host_only_iterator operator+(host_only_iterator x, difference_type n)
+  {
+    x += n;
+    return x;
+  }
+  friend constexpr host_only_iterator operator+(difference_type n, host_only_iterator x)
+  {
+    x += n;
+    return x;
+  }
+  friend constexpr host_only_iterator operator-(host_only_iterator x, difference_type n)
+  {
+    x -= n;
+    return x;
+  }
+  friend constexpr difference_type operator-(host_only_iterator x, host_only_iterator y)
+  {
+    return x.it_ - y.it_;
+  }
+
+  friend constexpr bool operator==(const host_only_iterator& x, const host_only_iterator& y)
+  {
+    return x.it_ == y.it_;
+  }
+  friend constexpr bool operator!=(const host_only_iterator& x, const host_only_iterator& y)
+  {
+    return x.it_ != y.it_;
+  }
+  friend constexpr bool operator<(const host_only_iterator& x, const host_only_iterator& y)
+  {
+    return x.it_ < y.it_;
+  }
+  friend constexpr bool operator<=(const host_only_iterator& x, const host_only_iterator& y)
+  {
+    return x.it_ <= y.it_;
+  }
+  friend constexpr bool operator>(const host_only_iterator& x, const host_only_iterator& y)
+  {
+    return x.it_ > y.it_;
+  }
+  friend constexpr bool operator>=(const host_only_iterator& x, const host_only_iterator& y)
+  {
+    return x.it_ >= y.it_;
+  }
+
+  friend constexpr It base(const host_only_iterator& i)
+  {
+    return i.it_;
+  }
+
+  template <class T>
+  void operator,(T const&) = delete;
+};
+static_assert(cuda::std::random_access_iterator<host_only_iterator<int*>>);
+#endif // !TEST_COMPILER(NVRTC)
+
+#if TEST_CUDA_COMPILATION()
+template <class It>
+class device_only_iterator
+{
+  It it_;
+
+  template <class U>
+  friend class device_only_iterator;
+
+public:
+  using iterator_category = cuda::std::random_access_iterator_tag;
+  using value_type        = typename cuda::std::iterator_traits<It>::value_type;
+  using difference_type   = typename cuda::std::iterator_traits<It>::difference_type;
+  using pointer           = It;
+  using reference         = typename cuda::std::iterator_traits<It>::reference;
+
+  TEST_DEVICE_FUNC constexpr device_only_iterator()
+      : it_()
+  {}
+  TEST_DEVICE_FUNC constexpr explicit device_only_iterator(It it)
+      : it_(it)
+  {}
+
+  template <class U>
+  TEST_DEVICE_FUNC constexpr device_only_iterator(const device_only_iterator<U>& u)
+      : it_(u.it_)
+  {}
+
+  template <class U, class = typename cuda::std::enable_if<cuda::std::is_default_constructible<U>::value>::type>
+  TEST_DEVICE_FUNC constexpr device_only_iterator(device_only_iterator<U>&& u)
+      : it_(cuda::std::move(u.it_))
+  {
+    u.it_ = U();
+  }
+
+  TEST_DEVICE_FUNC constexpr reference operator*() const
+  {
+    return *it_;
+  }
+  TEST_DEVICE_FUNC constexpr reference operator[](difference_type n) const
+  {
+    return it_[n];
+  }
+
+  TEST_DEVICE_FUNC constexpr device_only_iterator& operator++()
+  {
+    ++it_;
+    return *this;
+  }
+  TEST_DEVICE_FUNC constexpr device_only_iterator& operator--()
+  {
+    --it_;
+    return *this;
+  }
+  TEST_DEVICE_FUNC constexpr device_only_iterator operator++(int)
+  {
+    return device_only_iterator(it_++);
+  }
+  TEST_DEVICE_FUNC constexpr device_only_iterator operator--(int)
+  {
+    return device_only_iterator(it_--);
+  }
+
+  TEST_DEVICE_FUNC constexpr device_only_iterator& operator+=(difference_type n)
+  {
+    it_ += n;
+    return *this;
+  }
+  TEST_DEVICE_FUNC constexpr device_only_iterator& operator-=(difference_type n)
+  {
+    it_ -= n;
+    return *this;
+  }
+  TEST_DEVICE_FUNC friend constexpr device_only_iterator operator+(device_only_iterator x, difference_type n)
+  {
+    x += n;
+    return x;
+  }
+  TEST_DEVICE_FUNC friend constexpr device_only_iterator operator+(difference_type n, device_only_iterator x)
+  {
+    x += n;
+    return x;
+  }
+  TEST_DEVICE_FUNC friend constexpr device_only_iterator operator-(device_only_iterator x, difference_type n)
+  {
+    x -= n;
+    return x;
+  }
+  TEST_DEVICE_FUNC friend constexpr difference_type operator-(device_only_iterator x, device_only_iterator y)
+  {
+    return x.it_ - y.it_;
+  }
+
+  TEST_DEVICE_FUNC friend constexpr bool operator==(const device_only_iterator& x, const device_only_iterator& y)
+  {
+    return x.it_ == y.it_;
+  }
+  TEST_DEVICE_FUNC friend constexpr bool operator!=(const device_only_iterator& x, const device_only_iterator& y)
+  {
+    return x.it_ != y.it_;
+  }
+  TEST_DEVICE_FUNC friend constexpr bool operator<(const device_only_iterator& x, const device_only_iterator& y)
+  {
+    return x.it_ < y.it_;
+  }
+  TEST_DEVICE_FUNC friend constexpr bool operator<=(const device_only_iterator& x, const device_only_iterator& y)
+  {
+    return x.it_ <= y.it_;
+  }
+  TEST_DEVICE_FUNC friend constexpr bool operator>(const device_only_iterator& x, const device_only_iterator& y)
+  {
+    return x.it_ > y.it_;
+  }
+  TEST_DEVICE_FUNC friend constexpr bool operator>=(const device_only_iterator& x, const device_only_iterator& y)
+  {
+    return x.it_ >= y.it_;
+  }
+
+  TEST_DEVICE_FUNC friend constexpr It base(const device_only_iterator& i)
+  {
+    return i.it_;
+  }
+
+  template <class T>
+  void operator,(T const&) = delete;
+};
+static_assert(cuda::std::random_access_iterator<device_only_iterator<int*>>);
+#endif // TEST_CUDA_COMPILATION()
 
 #endif // SUPPORT_TEST_ITERATORS_H

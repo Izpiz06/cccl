@@ -18,12 +18,14 @@
 #include <cub/block/block_load.cuh>
 #include <cub/block/block_scan.cuh>
 #include <cub/detail/delay_constructor.cuh>
+#include <cub/detail/prefetch.cuh>
 #include <cub/device/dispatch/tuning/common.cuh>
 #include <cub/util_device.cuh>
 #include <cub/util_math.cuh>
 #include <cub/util_type.cuh>
 
 #include <cuda/std/__algorithm/clamp.h>
+#include <cuda/std/__host_stdlib/ostream>
 #include <cuda/std/__type_traits/is_same.h>
 #include <cuda/std/optional>
 
@@ -31,11 +33,190 @@
 #  include <ciso646>
 #endif // _CCCL_COMPILER(MSVC)
 
-#if !_CCCL_COMPILER(NVRTC)
-#  include <ostream>
-#endif // !_CCCL_COMPILER(NVRTC)
-
 CUB_NAMESPACE_BEGIN
+
+//! The lookback tuning policy for all non-ByKey algorithms in @ref DeviceSelect
+struct SelectLookbackPolicy
+{
+  int threads_per_block; //!< Number of threads in a CUDA block
+  int items_per_thread; //!< Number of items processed per thread
+  BlockLoadAlgorithm load_algorithm; //!< The @ref BlockLoadAlgorithm used for loading items from global memory
+  CacheLoadModifier load_modifier; //!< The @ref CacheLoadModifier used for loading items from global memory
+  BlockScanAlgorithm scan_algorithm; //!< The @ref BlockScanAlgorithm used for scanning
+  LookbackDelayPolicy lookback_delay; //!< The policy configuring the delay used in decoupled lookback
+  detail::LoadPrefetch _load_prefetch = detail::LoadPrefetch::none; //!< Implementation detail; do not use directly
+
+  [[nodiscard]] _CCCL_HOST_DEVICE_API friend constexpr bool
+  operator==(const SelectLookbackPolicy& lhs, const SelectLookbackPolicy& rhs) noexcept
+  {
+    return lhs.threads_per_block == rhs.threads_per_block && lhs.items_per_thread == rhs.items_per_thread
+        && lhs.load_algorithm == rhs.load_algorithm && lhs.load_modifier == rhs.load_modifier
+        && lhs.scan_algorithm == rhs.scan_algorithm && lhs.lookback_delay == rhs.lookback_delay
+        && lhs._load_prefetch == rhs._load_prefetch;
+  }
+
+  [[nodiscard]] _CCCL_HOST_DEVICE_API friend constexpr bool
+  operator!=(const SelectLookbackPolicy& lhs, const SelectLookbackPolicy& rhs) noexcept
+  {
+    return !(lhs == rhs);
+  }
+
+#if _CCCL_HOSTED()
+  friend ::std::ostream& operator<<(::std::ostream& os, const SelectLookbackPolicy& p)
+  {
+    return os
+        << "SelectLookbackPolicy { .threads_per_block = " << p.threads_per_block
+        << ", .items_per_thread = " << p.items_per_thread << ", .load_algorithm = " << p.load_algorithm
+        << ", .load_modifier = " << p.load_modifier << ", .scan_algorithm = " << p.scan_algorithm
+        << ", .lookback_delay = " << p.lookback_delay << ", ._load_prefetch = " << p._load_prefetch << " }";
+  }
+#endif // _CCCL_HOSTED()
+};
+
+//! The selection algorithm used by @ref cub::DeviceSelect "DeviceSelect"
+enum class SelectAlgorithm
+{
+  lookback
+};
+
+#if _CCCL_HOSTED()
+namespace detail
+{
+[[nodiscard]] _CCCL_HOST_DEVICE_API constexpr const char* to_string(SelectAlgorithm algo) noexcept
+{
+  switch (algo)
+  {
+    case SelectAlgorithm::lookback:
+      return "SelectAlgorithm::lookback";
+  }
+  return "<unknown SelectAlgorithm>";
+}
+} // namespace detail
+
+inline ::std::ostream& operator<<(::std::ostream& os, SelectAlgorithm algo)
+{
+  return os << CUB_NS_QUALIFIER::detail::to_string(algo);
+}
+#endif // _CCCL_HOSTED()
+
+//! The tuning policy for all non-ByKey algorithms in @ref DeviceSelect
+// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+struct SelectPolicy
+{
+  SelectAlgorithm algorithm; //!< The select algorithm to use
+  SelectLookbackPolicy lookback; //!< The policy for the selection algorithm based on decoupled-lookback. Only used when
+                                 //!< @p algorithm is @lookback.
+
+  [[nodiscard]] _CCCL_HOST_DEVICE_API friend constexpr bool
+  operator==(const SelectPolicy& lhs, const SelectPolicy& rhs) noexcept
+  {
+    return lhs.algorithm == rhs.algorithm && lhs.lookback == rhs.lookback;
+  }
+
+  [[nodiscard]] _CCCL_HOST_DEVICE_API friend constexpr bool
+  operator!=(const SelectPolicy& lhs, const SelectPolicy& rhs) noexcept
+  {
+    return !(lhs == rhs);
+  }
+
+#if _CCCL_HOSTED()
+  friend ::std::ostream& operator<<(::std::ostream& os, const SelectPolicy& p)
+  {
+    return os << "SelectPolicy { .algorithm = " << p.algorithm << ", .lookback = " << p.lookback << " }";
+  }
+#endif // _CCCL_HOSTED()
+};
+
+//! The algorithm used by the partition policy.
+enum class PartitionAlgorithm
+{
+  lookback
+};
+
+#if _CCCL_HOSTED()
+namespace detail
+{
+[[nodiscard]] _CCCL_HOST_DEVICE_API constexpr const char* to_string(PartitionAlgorithm algo) noexcept
+{
+  switch (algo)
+  {
+    case PartitionAlgorithm::lookback:
+      return "PartitionAlgorithm::lookback";
+  }
+  return "<unknown PartitionAlgorithm>";
+}
+} // namespace detail
+
+inline ::std::ostream& operator<<(::std::ostream& os, PartitionAlgorithm algo)
+{
+  return os << CUB_NS_QUALIFIER::detail::to_string(algo);
+}
+#endif // _CCCL_HOSTED()
+
+// We have a dedicated policy for partition, since it's also a dedicated public API. However, we will convert this
+// policy to a SelectPolicy at the device layer so the dispatch and kernel can just use a SelectPolicy.
+//! The lookback tuning policy for all non-three-way algorithms of @ref DevicePartition
+struct PartitionLookbackPolicy
+{
+  int threads_per_block; //!< Number of threads in a CUDA block
+  int items_per_thread; //!< Number of items processed per thread
+  BlockLoadAlgorithm load_algorithm; //!< The @ref BlockLoadAlgorithm used for loading items from global memory
+  CacheLoadModifier load_modifier; //!< The @ref CacheLoadModifier used for loading items from global memory
+  BlockScanAlgorithm scan_algorithm; //!< The @ref BlockScanAlgorithm used for scanning
+  LookbackDelayPolicy lookback_delay; //!< The policy configuring the delay used in decoupled lookback
+
+  [[nodiscard]] _CCCL_HOST_DEVICE_API friend constexpr bool
+  operator==(const PartitionLookbackPolicy& lhs, const PartitionLookbackPolicy& rhs) noexcept
+  {
+    return lhs.threads_per_block == rhs.threads_per_block && lhs.items_per_thread == rhs.items_per_thread
+        && lhs.load_algorithm == rhs.load_algorithm && lhs.load_modifier == rhs.load_modifier
+        && lhs.scan_algorithm == rhs.scan_algorithm && lhs.lookback_delay == rhs.lookback_delay;
+  }
+
+  [[nodiscard]] _CCCL_HOST_DEVICE_API friend constexpr bool
+  operator!=(const PartitionLookbackPolicy& lhs, const PartitionLookbackPolicy& rhs) noexcept
+  {
+    return !(lhs == rhs);
+  }
+
+#if _CCCL_HOSTED()
+  friend ::std::ostream& operator<<(::std::ostream& os, const PartitionLookbackPolicy& p)
+  {
+    return os
+        << "PartitionLookbackPolicy { .threads_per_block = " << p.threads_per_block << ", .items_per_thread = "
+        << p.items_per_thread << ", .load_algorithm = " << p.load_algorithm << ", .load_modifier = " << p.load_modifier
+        << ", .scan_algorithm = " << p.scan_algorithm << ", .lookback_delay = " << p.lookback_delay << " }";
+  }
+#endif // _CCCL_HOSTED()
+};
+
+//! The tuning policy for all non-three-way algorithms of @ref DevicePartition
+// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+struct PartitionPolicy
+{
+  PartitionAlgorithm algorithm = PartitionAlgorithm::lookback; //!< The partition algorithm to use
+  PartitionLookbackPolicy lookback; //!< The policy for the partition algorithm based on decoupled-lookback. Only used
+                                    //!< when algorithm is @lookback.
+
+  [[nodiscard]] _CCCL_HOST_DEVICE_API friend constexpr bool
+  operator==(const PartitionPolicy& lhs, const PartitionPolicy& rhs) noexcept
+  {
+    return lhs.algorithm == rhs.algorithm && lhs.lookback == rhs.lookback;
+  }
+
+  [[nodiscard]] _CCCL_HOST_DEVICE_API friend constexpr bool
+  operator!=(const PartitionPolicy& lhs, const PartitionPolicy& rhs) noexcept
+  {
+    return !(lhs == rhs);
+  }
+
+#if _CCCL_HOSTED()
+  friend ::std::ostream& operator<<(::std::ostream& os, const PartitionPolicy& p)
+  {
+    return os << "PartitionPolicy { .algorithm = " << p.algorithm << ", .lookback = " << p.lookback << " }";
+  }
+#endif // _CCCL_HOSTED()
+};
 
 namespace detail::select
 {
@@ -1508,12 +1689,12 @@ struct policy_hub
     static constexpr int items_per_thread =
       ::cuda::std::clamp(nominal_4B_items_per_thread * 4 / int{sizeof(InputT)}, 1, nominal_4B_items_per_thread);
     using SelectIfPolicyT =
-      AgentSelectIfPolicy<128,
-                          items_per_thread,
-                          BLOCK_LOAD_DIRECT,
-                          LoadModifier,
-                          BLOCK_SCAN_WARP_SCANS,
-                          detail::fixed_delay_constructor_t<350, 450>>;
+      agent_select_if_policy<128,
+                             items_per_thread,
+                             BLOCK_LOAD_DIRECT,
+                             LoadModifier,
+                             BLOCK_SCAN_WARP_SCANS,
+                             detail::fixed_delay_constructor_t<350, 450>>;
   };
 
   // nvbug5935129: GCC-11.2 cannot directly use DefaultPolicy inside Policy500
@@ -1521,22 +1702,22 @@ struct policy_hub
 
   struct Policy500
       : DefaultPolicy500
-      , ChainedPolicy<500, Policy500, Policy500>
+      , detail::chained_policy<500, Policy500, Policy500>
   {};
 
   // Use values from tuning if a specialization exists, otherwise pick the default
   template <typename Tuning>
   static auto select_agent_policy(int)
-    -> AgentSelectIfPolicy<Tuning::threads,
-                           Tuning::items,
-                           Tuning::load_algorithm,
-                           LOAD_DEFAULT,
-                           BLOCK_SCAN_WARP_SCANS,
-                           typename Tuning::delay_constructor>;
+    -> agent_select_if_policy<Tuning::threads,
+                              Tuning::items,
+                              Tuning::load_algorithm,
+                              LOAD_DEFAULT,
+                              BLOCK_SCAN_WARP_SCANS,
+                              typename Tuning::delay_constructor>;
   template <typename Tuning>
   static auto select_agent_policy(long) -> typename DefaultPolicy<LOAD_DEFAULT>::SelectIfPolicyT;
 
-  struct Policy800 : ChainedPolicy<800, Policy800, Policy500>
+  struct Policy800 : detail::chained_policy<800, Policy800, Policy500>
   {
     using SelectIfPolicyT =
       decltype(select_agent_policy<sm80_tuning<InputT,
@@ -1552,10 +1733,10 @@ struct policy_hub
 
   struct Policy860
       : DefaultPolicy860
-      , ChainedPolicy<860, Policy860, Policy800>
+      , detail::chained_policy<860, Policy860, Policy800>
   {};
 
-  struct Policy900 : ChainedPolicy<900, Policy900, Policy860>
+  struct Policy900 : detail::chained_policy<900, Policy900, Policy860>
   {
     using SelectIfPolicyT =
       decltype(select_agent_policy<sm90_tuning<InputT,
@@ -1566,17 +1747,17 @@ struct policy_hub
                                                classify_input_size<InputT>()>>(0));
   };
 
-  struct Policy1000 : ChainedPolicy<1000, Policy1000, Policy900>
+  struct Policy1000 : detail::chained_policy<1000, Policy1000, Policy900>
   {
     // Use values from tuning if a specialization exists, otherwise pick Policy900
     template <typename Tuning>
     static auto select_agent_policy100(int)
-      -> AgentSelectIfPolicy<Tuning::threads,
-                             Nominal4BItemsToItems<InputT>(Tuning::nominal_4b_items),
-                             Tuning::load_algorithm,
-                             Tuning::load_modifier,
-                             BLOCK_SCAN_WARP_SCANS,
-                             typename Tuning::delay_constructor>;
+      -> agent_select_if_policy<Tuning::threads,
+                                Nominal4BItemsToItems<InputT>(Tuning::nominal_4b_items),
+                                Tuning::load_algorithm,
+                                Tuning::load_modifier,
+                                BLOCK_SCAN_WARP_SCANS,
+                                typename Tuning::delay_constructor>;
     template <typename Tuning>
     static auto select_agent_policy100(long) -> typename Policy900::SelectIfPolicyT;
 
@@ -1594,41 +1775,9 @@ struct policy_hub
   using MaxPolicy = Policy1000;
 };
 
-struct select_if_policy
-{
-  int block_threads;
-  int items_per_thread;
-  BlockLoadAlgorithm load_algorithm;
-  CacheLoadModifier load_modifier;
-  BlockScanAlgorithm scan_algorithm;
-  delay_constructor_policy delay_constructor;
-
-  [[nodiscard]] _CCCL_API constexpr friend bool operator==(const select_if_policy& lhs, const select_if_policy& rhs)
-  {
-    return lhs.block_threads == rhs.block_threads && lhs.items_per_thread == rhs.items_per_thread
-        && lhs.load_algorithm == rhs.load_algorithm && lhs.load_modifier == rhs.load_modifier
-        && lhs.scan_algorithm == rhs.scan_algorithm && lhs.delay_constructor == rhs.delay_constructor;
-  }
-
-  [[nodiscard]] _CCCL_API constexpr friend bool operator!=(const select_if_policy& lhs, const select_if_policy& rhs)
-  {
-    return !(lhs == rhs);
-  }
-
-#if !_CCCL_COMPILER(NVRTC)
-  friend ::std::ostream& operator<<(::std::ostream& os, const select_if_policy& p)
-  {
-    return os
-        << "select_if_policy { .block_threads = " << p.block_threads << ", .items_per_thread = " << p.items_per_thread
-        << ", .load_algorithm = " << p.load_algorithm << ", .load_modifier = " << p.load_modifier
-        << ", .scan_algorithm = " << p.scan_algorithm << ", .delay_constructor = " << p.delay_constructor << " }";
-  }
-#endif // !_CCCL_COMPILER(NVRTC)
-};
-
 #if _CCCL_HAS_CONCEPTS()
 template <typename T>
-concept select_if_policy_selector = policy_selector<T, select_if_policy>;
+concept select_if_policy_selector = policy_selector<T, SelectPolicy>;
 #endif // _CCCL_HAS_CONCEPTS()
 
 struct policy_selector
@@ -1642,32 +1791,34 @@ struct policy_selector
   SelectImpl selection_impl;
 
 private:
-  [[nodiscard]] _CCCL_API constexpr auto default_policy(CacheLoadModifier load_modifier) const -> select_if_policy
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto default_policy(CacheLoadModifier load_modifier) const
+    -> SelectLookbackPolicy
   {
     constexpr int nominal_4B_items_per_thread = 10;
     const int items_per_thread =
       ::cuda::std::clamp(nominal_4B_items_per_thread * 4 / input_size_bytes, 1, nominal_4B_items_per_thread);
-    return select_if_policy{
+    return SelectLookbackPolicy{
       128,
       items_per_thread,
       BLOCK_LOAD_DIRECT,
       load_modifier,
       BLOCK_SCAN_WARP_SCANS,
-      delay_constructor_policy{delay_constructor_kind::fixed_delay, 350, 450}};
+      LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 350, 450}};
   }
 
-  [[nodiscard]] _CCCL_API constexpr auto make_scaled_policy(
-    int block_threads,
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto make_scaled_policy(
+    int threads_per_block,
     int nominal_4b_items,
     BlockLoadAlgorithm load_alg,
     CacheLoadModifier load_mod,
-    delay_constructor_policy delay) const -> select_if_policy
+    LookbackDelayPolicy delay) const -> SelectLookbackPolicy
   {
     const int items_per_thread = nominal_4B_items_to_items(nominal_4b_items, input_size_bytes);
-    return select_if_policy{block_threads, items_per_thread, load_alg, load_mod, BLOCK_SCAN_WARP_SCANS, delay};
+    return SelectLookbackPolicy{threads_per_block, items_per_thread, load_alg, load_mod, BLOCK_SCAN_WARP_SCANS, delay};
   }
 
-  [[nodiscard]] _CCCL_API constexpr auto get_sm80_tuning(bool has_flags, bool keep_rejects) const -> select_if_policy
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto get_sm80_tuning(bool has_flags, bool keep_rejects) const
+    -> SelectLookbackPolicy
   {
     // before SM100, we only tuned for int32, but we always take these tunings independently of the offset type size
 
@@ -1675,43 +1826,43 @@ private:
     {
       if (not has_flags && not keep_rejects)
       {
-        return select_if_policy{
+        return SelectLookbackPolicy{
           384,
           4,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
           BLOCK_SCAN_WARP_SCANS,
-          delay_constructor_policy{delay_constructor_kind::no_delay, 0, 1140}};
+          LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 1140}};
       }
       if (has_flags && not keep_rejects)
       {
-        return select_if_policy{
+        return SelectLookbackPolicy{
           256,
           5,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
           BLOCK_SCAN_WARP_SCANS,
-          delay_constructor_policy{delay_constructor_kind::fixed_delay, 464, 1025}};
+          LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 464, 1025}};
       }
       if (not has_flags && keep_rejects)
       {
-        return select_if_policy{
+        return SelectLookbackPolicy{
           256,
           5,
           BLOCK_LOAD_WARP_TRANSPOSE,
           LOAD_DEFAULT,
           BLOCK_SCAN_WARP_SCANS,
-          delay_constructor_policy{delay_constructor_kind::fixed_delay, 400, 1090}};
+          LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 400, 1090}};
       }
       if (has_flags && keep_rejects)
       {
-        return select_if_policy{
+        return SelectLookbackPolicy{
           256,
           5,
           BLOCK_LOAD_WARP_TRANSPOSE,
           LOAD_DEFAULT,
           BLOCK_SCAN_WARP_SCANS,
-          delay_constructor_policy{delay_constructor_kind::fixed_delay, 400, 1090}};
+          LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 400, 1090}};
       }
     }
 
@@ -1725,37 +1876,37 @@ private:
       switch (input_size_bytes)
       {
         case 1:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             992,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 395}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 395}};
         case 2:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             576,
             14,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 870}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 870}};
         case 4:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             256,
             18,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 1130}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 1130}};
         case 8:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             192,
             10,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 832, 1165}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 832, 1165}};
         default:
           break;
       }
@@ -1765,37 +1916,37 @@ private:
       switch (input_size_bytes)
       {
         case 1:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             224,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 735}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 735}};
         case 2:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             256,
             20,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 1155}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 1155}};
         case 4:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             320,
             10,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 124, 1115}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 124, 1115}};
         case 8:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             384,
             6,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 1130}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 1130}};
         default:
           break;
       }
@@ -1805,37 +1956,37 @@ private:
       switch (input_size_bytes)
       {
         case 1:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             512,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 510}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 510}};
         case 2:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             224,
             18,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 1045}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 1045}};
         case 4:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             192,
             15,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 1040}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 1040}};
         case 8:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             192,
             10,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 68, 1160}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 68, 1160}};
         default:
           break;
       }
@@ -1845,37 +1996,37 @@ private:
       switch (input_size_bytes)
       {
         case 1:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             512,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 595}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 595}};
         case 2:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             224,
             18,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 1105}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 1105}};
         case 4:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             192,
             12,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 912, 1025}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 912, 1025}};
         case 8:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             192,
             12,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 884, 1130}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 884, 1130}};
         default:
           break;
       }
@@ -1883,7 +2034,8 @@ private:
     return default_policy(LOAD_DEFAULT);
   }
 
-  [[nodiscard]] _CCCL_API constexpr auto get_sm90_tuning(bool has_flags, bool keep_rejects) const -> select_if_policy
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto get_sm90_tuning(bool has_flags, bool keep_rejects) const
+    -> SelectLookbackPolicy
   {
     // before SM100, we only tuned for int32, but we always take these tunings independently of the offset type size
 
@@ -1891,43 +2043,43 @@ private:
     {
       if (not has_flags && not keep_rejects)
       {
-        return select_if_policy{
+        return SelectLookbackPolicy{
           512,
           5,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
           BLOCK_SCAN_WARP_SCANS,
-          delay_constructor_policy{delay_constructor_kind::fixed_delay, 460, 1145}};
+          LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 460, 1145}};
       }
       if (has_flags && not keep_rejects)
       {
-        return select_if_policy{
+        return SelectLookbackPolicy{
           512,
           3,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
           BLOCK_SCAN_WARP_SCANS,
-          delay_constructor_policy{delay_constructor_kind::fixed_delay, 284, 1130}};
+          LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 284, 1130}};
       }
       if (not has_flags && keep_rejects)
       {
-        return select_if_policy{
+        return SelectLookbackPolicy{
           192,
           5,
           BLOCK_LOAD_WARP_TRANSPOSE,
           LOAD_DEFAULT,
           BLOCK_SCAN_WARP_SCANS,
-          delay_constructor_policy{delay_constructor_kind::fixed_delay, 1616, 1115}};
+          LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 1616, 1115}};
       }
       if (has_flags && keep_rejects)
       {
-        return select_if_policy{
+        return SelectLookbackPolicy{
           160,
           5,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
           BLOCK_SCAN_WARP_SCANS,
-          delay_constructor_policy{delay_constructor_kind::fixed_delay, 720, 1105}};
+          LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 720, 1105}};
       }
     }
 
@@ -1941,37 +2093,37 @@ private:
       switch (input_size_bytes)
       {
         case 1:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             256,
             22,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 580}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 580}};
         case 2:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             256,
             22,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 320, 605}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 320, 605}};
         case 4:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             384,
             17,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 76, 1150}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 76, 1150}};
         case 8:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             384,
             11,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 380, 1140}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 380, 1140}};
         default:
           break;
       }
@@ -1981,37 +2133,37 @@ private:
       switch (input_size_bytes)
       {
         case 1:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             448,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::no_delay, 0, 715}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 0, 715}};
         case 2:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             448,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 504, 765}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 504, 765}};
         case 4:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             384,
             15,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 415, 1125}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 415, 1125}};
         case 8:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             384,
             11,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 360, 1170}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 360, 1170}};
         default:
           break;
       }
@@ -2021,37 +2173,37 @@ private:
       switch (input_size_bytes)
       {
         case 1:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             384,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 908, 995}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 908, 995}};
         case 2:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             320,
             14,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 500, 560}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 500, 560}};
         case 4:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             256,
             14,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 536, 1055}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 536, 1055}};
         case 8:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             128,
             12,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 512, 1075}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 512, 1075}};
         default:
           break;
       }
@@ -2061,37 +2213,37 @@ private:
       switch (input_size_bytes)
       {
         case 1:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             256,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 580, 850}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 580, 850}};
         case 2:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             512,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 388, 1055}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 388, 1055}};
         case 4:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             256,
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 72, 1165}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 72, 1165}};
         case 8:
-          return select_if_policy{
+          return SelectLookbackPolicy{
             224,
             6,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
             BLOCK_SCAN_WARP_SCANS,
-            delay_constructor_policy{delay_constructor_kind::fixed_delay, 532, 1180}};
+            LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 532, 1180}};
         default:
           break;
       }
@@ -2099,8 +2251,9 @@ private:
     return default_policy(LOAD_DEFAULT);
   }
 
-  [[nodiscard]] _CCCL_API constexpr auto get_sm100_tuning(bool has_flags, bool keep_rejects, bool may_alias) const
-    -> ::cuda::std::optional<select_if_policy>
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto
+  get_sm100_tuning(bool has_flags, bool keep_rejects, bool may_alias) const
+    -> ::cuda::std::optional<SelectLookbackPolicy>
   {
     if (not input_is_primitive)
     {
@@ -2118,7 +2271,7 @@ private:
           22,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
-          delay_constructor_policy{delay_constructor_kind::exponential_backoff, 0, 915});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backoff, 0, 915});
       }
       if (input_size_bytes == 1 && may_alias)
       {
@@ -2128,7 +2281,7 @@ private:
           20,
           BLOCK_LOAD_WARP_TRANSPOSE,
           LOAD_DEFAULT,
-          delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter, 596, 295});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 596, 295});
       }
       if (input_size_bytes == 4 && not may_alias)
       {
@@ -2138,7 +2291,7 @@ private:
           15,
           BLOCK_LOAD_WARP_TRANSPOSE,
           LOAD_DEFAULT,
-          delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 1508, 585});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 1508, 585});
       }
     }
 
@@ -2153,7 +2306,7 @@ private:
           20,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
-          delay_constructor_policy{delay_constructor_kind::exponential_backon, 84, 480});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 84, 480});
       }
       if (input_size_bytes == 1 && may_alias)
       {
@@ -2163,7 +2316,7 @@ private:
           20,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
-          delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter, 360, 380});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 360, 380});
       }
       if (input_size_bytes == 2 && not may_alias)
       {
@@ -2173,7 +2326,7 @@ private:
           22,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
-          delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 1292, 750});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 1292, 750});
       }
       if (input_size_bytes == 2 && may_alias)
       {
@@ -2183,7 +2336,7 @@ private:
           20,
           BLOCK_LOAD_WARP_TRANSPOSE,
           LOAD_DEFAULT,
-          delay_constructor_policy{delay_constructor_kind::exponential_backoff, 136, 760});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backoff, 136, 760});
       }
       if (input_size_bytes == 4 && not may_alias)
       {
@@ -2193,7 +2346,7 @@ private:
           14,
           BLOCK_LOAD_DIRECT,
           LOAD_DEFAULT,
-          delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter, 844, 675});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 844, 675});
       }
       if (input_size_bytes == 4 && may_alias)
       {
@@ -2203,7 +2356,7 @@ private:
           14,
           BLOCK_LOAD_WARP_TRANSPOSE,
           LOAD_DEFAULT,
-          delay_constructor_policy{delay_constructor_kind::exponential_backon, 524, 635});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 524, 635});
       }
       if (input_size_bytes == 8 && not may_alias)
       {
@@ -2213,7 +2366,7 @@ private:
           22,
           BLOCK_LOAD_DIRECT,
           LOAD_CA,
-          delay_constructor_policy{delay_constructor_kind::exponential_backon, 660, 1030});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 660, 1030});
       }
       if (input_size_bytes == 8 && may_alias)
       {
@@ -2223,7 +2376,7 @@ private:
           21,
           BLOCK_LOAD_WARP_TRANSPOSE,
           LOAD_CA,
-          delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 1316, 990});
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 1316, 990});
       }
       return {};
     }
@@ -2241,7 +2394,7 @@ private:
             15,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon, 676, 500});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 676, 500});
         }
         if (offset_size_bytes == 4 && input_size_bytes == 2)
         {
@@ -2251,7 +2404,7 @@ private:
             22,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter, 1756, 615});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 1756, 615});
         }
         if (offset_size_bytes == 4 && input_size_bytes == 4)
         {
@@ -2261,7 +2414,7 @@ private:
             19,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 716, 570});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 716, 570});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 1)
         {
@@ -2271,7 +2424,7 @@ private:
             22,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon, 368, 680});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 368, 680});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 2)
         {
@@ -2281,7 +2434,7 @@ private:
             20,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter, 516, 635});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 516, 635});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 4)
         {
@@ -2291,7 +2444,7 @@ private:
             18,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 1712, 825});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 1712, 825});
         }
       }
       else // not distinct_partitions
@@ -2304,7 +2457,7 @@ private:
             22,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backoff, 68, 990});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backoff, 68, 990});
         }
         if (offset_size_bytes == 4 && input_size_bytes == 2)
         {
@@ -2314,7 +2467,7 @@ private:
             22,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 560, 640});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 560, 640});
         }
         if (offset_size_bytes == 4 && input_size_bytes == 4)
         {
@@ -2324,7 +2477,7 @@ private:
             19,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 724, 970});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 724, 970});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 1)
         {
@@ -2334,7 +2487,7 @@ private:
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter, 1016, 545});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 1016, 545});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 2)
         {
@@ -2344,7 +2497,7 @@ private:
             22,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backoff, 124, 690});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backoff, 124, 690});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 4)
         {
@@ -2354,7 +2507,7 @@ private:
             19,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter, 1884, 950});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 1884, 950});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 8)
         {
@@ -2364,7 +2517,7 @@ private:
             23,
             BLOCK_LOAD_WARP_TRANSPOSE,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backoff, 0, 1200});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backoff, 0, 1200});
         }
       }
     }
@@ -2382,7 +2535,7 @@ private:
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon, 964, 385});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 964, 385});
         }
         if (offset_size_bytes == 4 && input_size_bytes == 8)
         {
@@ -2392,7 +2545,7 @@ private:
             21,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon, 300, 580});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 300, 580});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 1)
         {
@@ -2402,7 +2555,7 @@ private:
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_CA,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter, 240, 845});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 240, 845});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 2)
         {
@@ -2412,7 +2565,7 @@ private:
             14,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon, 1428, 830});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 1428, 830});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 4)
         {
@@ -2422,7 +2575,7 @@ private:
             14,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 1204, 635});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 1204, 635});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 8)
         {
@@ -2432,7 +2585,7 @@ private:
             19,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon, 1016, 875});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 1016, 875});
         }
       }
       else // not distinct_partitions
@@ -2445,7 +2598,7 @@ private:
             24,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 2024, 835});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 2024, 835});
         }
         if (offset_size_bytes == 4 && input_size_bytes == 4)
         {
@@ -2455,7 +2608,7 @@ private:
             11,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon, 476, 665});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 476, 665});
         }
         if (offset_size_bytes == 4 && input_size_bytes == 8)
         {
@@ -2465,7 +2618,7 @@ private:
             20,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 1420, 525});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 1420, 525});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 1)
         {
@@ -2475,7 +2628,7 @@ private:
             12,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 0, 850});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 0, 850});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 2)
         {
@@ -2485,7 +2638,7 @@ private:
             12,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon, 1552, 730});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 1552, 730});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 4)
         {
@@ -2495,7 +2648,7 @@ private:
             14,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backon_jitter_window, 1444, 655});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 1444, 655});
         }
         if (offset_size_bytes == 8 && input_size_bytes == 8)
         {
@@ -2505,7 +2658,7 @@ private:
             11,
             BLOCK_LOAD_DIRECT,
             LOAD_DEFAULT,
-            delay_constructor_policy{delay_constructor_kind::exponential_backoff, 536, 845});
+            LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backoff, 536, 845});
         }
       }
     }
@@ -2513,14 +2666,427 @@ private:
     return {};
   }
 
-public:
-  [[nodiscard]] _CCCL_API constexpr auto operator()(::cuda::arch_id arch) const -> select_if_policy
+  // tunings from cub/benchmarks/bench/select/if.cu and cub/benchmarks/bench/select/unique.cu, which dispatch through
+  // the same cells; each entry won on both benchmarks. These are raw measured values and must not be passed through
+  // nominal_4B_items_to_items.
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto
+  get_sm107_tuning(bool has_flags, bool keep_rejects, bool may_alias) const
+    -> ::cuda::std::optional<SelectLookbackPolicy>
+  {
+    if (has_flags || keep_rejects || may_alias || offset_size_bytes != 4)
+    {
+      return {};
+    }
+
+    if (!input_is_primitive && input_type != type_t::int128 && input_type != type_t::uint128)
+    {
+      return {};
+    }
+
+    if (input_size_bytes == 1)
+    {
+      // trp_0.ld_0.ipt_20.tpb_512.ns_76.dcid_5.l2w_475  if 2^28 1.132, unique 2^28 1.147
+      return SelectLookbackPolicy{
+        512,
+        20,
+        BLOCK_LOAD_DIRECT,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 76, 475}};
+    }
+    if (input_size_bytes == 2)
+    {
+      // trp_1.ld_0.ipt_22.tpb_512.ns_456.dcid_0.l2w_525  if 2^28 1.174, unique 2^28 1.188
+      return SelectLookbackPolicy{
+        512,
+        22,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 456, 525}};
+    }
+    if (input_size_bytes == 4)
+    {
+      if (input_type == type_t::float32)
+      {
+        // trp_1.ld_1.ipt_19.tpb_512.ns_20.dcid_5.l2w_555  if 2^28 1.477, unique 2^28 1.471
+        return SelectLookbackPolicy{
+          512,
+          19,
+          BLOCK_LOAD_WARP_TRANSPOSE,
+          LOAD_CA,
+          BLOCK_SCAN_WARP_SCANS,
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 20, 555}};
+      }
+      // trp_1.ld_0.ipt_23.tpb_448.ns_872.dcid_0.l2w_560  if 2^28 1.461, unique 2^28 1.513
+      return SelectLookbackPolicy{
+        448,
+        23,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 872, 560}};
+    }
+    if (input_size_bytes == 8)
+    {
+      if (input_type == type_t::float64)
+      {
+        // trp_1.ld_0.ipt_19.tpb_160.ns_0.dcid_1.l2w_555  if 2^28 1.445, unique 2^28 1.298
+        return SelectLookbackPolicy{
+          160,
+          19,
+          BLOCK_LOAD_WARP_TRANSPOSE,
+          LOAD_DEFAULT,
+          BLOCK_SCAN_WARP_SCANS,
+          LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 0, 555}};
+      }
+      // trp_1.ld_1.ipt_17.tpb_256.ns_680.dcid_6.l2w_625  if 2^28 1.330, unique 2^28 1.527
+      return SelectLookbackPolicy{
+        256,
+        17,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_CA,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 680, 625}};
+    }
+    if (input_size_bytes == 16)
+    {
+      // trp_1.ld_0.ipt_19.tpb_128.ns_1136.dcid_0.l2w_780  if 2^28 1.398, unique 2^28 1.552
+      return SelectLookbackPolicy{
+        128,
+        19,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 1136, 780}};
+    }
+
+    return {};
+  }
+
+  // partition::if
+  // tunings from cub/benchmarks/bench/partition/if.cu. These are raw measured values and must not be passed through
+  // nominal_4B_items_to_items.
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto get_sm107_partition_tuning() const noexcept
+    -> ::cuda::std::optional<SelectLookbackPolicy>
+  {
+    if (distinct_partitions || offset_size_bytes != 8)
+    {
+      return {};
+    }
+
+    if (!input_is_primitive && input_type != type_t::int128 && input_type != type_t::uint128)
+    {
+      return {};
+    }
+
+    if (input_size_bytes == 1)
+    {
+      // trp_0.ld_0.ipt_22.tpb_512.ns_152.dcid_1.l2w_955  2^24 1.356  2^28 1.607
+      return SelectLookbackPolicy{
+        512,
+        22,
+        BLOCK_LOAD_DIRECT,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 152, 955}};
+    }
+    if (input_size_bytes == 2)
+    {
+      // trp_1.ld_1.ipt_22.tpb_256.ns_12.dcid_7.l2w_885  2^24 1.192  2^28 1.337
+      return SelectLookbackPolicy{
+        256,
+        22,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_CA,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 12, 885}};
+    }
+    if (input_size_bytes == 4)
+    {
+      if (input_type == type_t::float32)
+      {
+        // trp_1.ld_1.ipt_23.tpb_512.ns_644.dcid_0.l2w_765  2^24 1.325  2^28 1.511
+        return SelectLookbackPolicy{
+          512,
+          23,
+          BLOCK_LOAD_WARP_TRANSPOSE,
+          LOAD_CA,
+          BLOCK_SCAN_WARP_SCANS,
+          LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 644, 765}};
+      }
+      // trp_1.ld_0.ipt_23.tpb_512.ns_1356.dcid_0.l2w_830  2^24 1.327  2^28 1.516
+      return SelectLookbackPolicy{
+        512,
+        23,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 1356, 830}};
+    }
+    if (input_size_bytes == 8)
+    {
+      if (input_type == type_t::float64)
+      {
+        // trp_1.ld_0.ipt_13.tpb_320.ns_168.dcid_6.l2w_630  2^24 1.193  2^28 1.230
+        return SelectLookbackPolicy{
+          320,
+          13,
+          BLOCK_LOAD_WARP_TRANSPOSE,
+          LOAD_DEFAULT,
+          BLOCK_SCAN_WARP_SCANS,
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter, 168, 630}};
+      }
+      // trp_1.ld_1.ipt_23.tpb_192.ns_360.dcid_0.l2w_1035  2^24 1.220  2^28 1.334
+      return SelectLookbackPolicy{
+        192,
+        23,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_CA,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 360, 1035}};
+    }
+    if (input_size_bytes == 16)
+    {
+      // trp_1.ld_0.ipt_19.tpb_128.ns_12.dcid_3.l2w_1165  2^24 1.437  2^28 1.559
+      return SelectLookbackPolicy{
+        128,
+        19,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backoff_jitter, 12, 1165}};
+    }
+
+    return {};
+  }
+
+  // tunings from cub/benchmarks/bench/select/flagged.cu. Select implementations stream with an internal 32-bit
+  // offset, so the selector always reports a 4-byte offset regardless of the user's offset type. These are raw
+  // measured values and must not be passed through nominal_4B_items_to_items.
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto
+  get_sm107_flagged_tuning(bool has_flags, bool keep_rejects, bool may_alias) const
+    -> ::cuda::std::optional<SelectLookbackPolicy>
+  {
+    if (!has_flags || keep_rejects || may_alias || offset_size_bytes != 4)
+    {
+      return {};
+    }
+    if (!input_is_primitive && input_type != type_t::int128 && input_type != type_t::uint128)
+    {
+      return {};
+    }
+
+    if (input_size_bytes == 1)
+    {
+      // trp_0.ld_1.ipt_20.tpb_416.ns_20.dcid_5.l2w_555.pf_2  1.037  1.039  1.077  1.050
+      return SelectLookbackPolicy{
+        416,
+        20,
+        BLOCK_LOAD_DIRECT,
+        LOAD_CA,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 20, 555},
+        LoadPrefetch::l1};
+    }
+    if (input_size_bytes == 2)
+    {
+      // trp_1.ld_0.ipt_22.tpb_448.ns_436.dcid_0.l2w_695.pf_3  1.003  0.968  1.287  1.435
+      return SelectLookbackPolicy{
+        448,
+        22,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 436, 695},
+        LoadPrefetch::bulk_l2};
+    }
+    if (input_size_bytes == 4)
+    {
+      if (input_type == type_t::float32)
+      {
+        // trp_1.ld_0.ipt_20.tpb_448.ns_20.dcid_7.l2w_965.pf_3  0.933  0.956  1.115  1.161
+        return SelectLookbackPolicy{
+          448,
+          20,
+          BLOCK_LOAD_WARP_TRANSPOSE,
+          LOAD_DEFAULT,
+          BLOCK_SCAN_WARP_SCANS,
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 20, 965},
+          LoadPrefetch::bulk_l2};
+      }
+      // trp_0.ld_0.ipt_19.tpb_448.ns_1988.dcid_0.l2w_640.pf_2  1.016  0.985  1.084  1.111
+      return SelectLookbackPolicy{
+        448,
+        19,
+        BLOCK_LOAD_DIRECT,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 1988, 640},
+        LoadPrefetch::l1};
+    }
+    if (input_size_bytes == 8)
+    {
+      if (input_type == type_t::float64)
+      {
+        // trp_0.ld_0.ipt_11.tpb_512.ns_808.dcid_7.l2w_585.pf_1  1.012  1.169  1.096  1.088
+        return SelectLookbackPolicy{
+          512,
+          11,
+          BLOCK_LOAD_DIRECT,
+          LOAD_DEFAULT,
+          BLOCK_SCAN_WARP_SCANS,
+          LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 808, 585},
+          LoadPrefetch::l2};
+      }
+      // trp_1.ld_0.ipt_18.tpb_320.ns_492.dcid_5.l2w_750.pf_3  1.135  1.158  1.083  1.054
+      return SelectLookbackPolicy{
+        320,
+        18,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon_jitter_window, 492, 750},
+        LoadPrefetch::bulk_l2};
+    }
+    if (input_size_bytes == 16)
+    {
+      // trp_0.ld_1.ipt_19.tpb_128.ns_1236.dcid_0.l2w_675.pf_1  0.938  1.188  1.704  1.830
+      return SelectLookbackPolicy{
+        128,
+        19,
+        BLOCK_LOAD_DIRECT,
+        LOAD_CA,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 1236, 675},
+        LoadPrefetch::l2};
+    }
+
+    return {};
+  }
+
+  // tunings from cub/benchmarks/bench/partition/flagged.cu, which benchmarks with 4-byte offsets. These are raw
+  // measured values and must not be passed through nominal_4B_items_to_items.
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto get_sm107_flagged_partition_tuning() const noexcept
+    -> ::cuda::std::optional<SelectLookbackPolicy>
+  {
+    if (distinct_partitions || offset_size_bytes != 4)
+    {
+      return {};
+    }
+    if (!input_is_primitive && input_type != type_t::int128 && input_type != type_t::uint128)
+    {
+      return {};
+    }
+
+    if (input_size_bytes == 1)
+    {
+      // trp_0.ld_0.ipt_22.tpb_512.ns_500.dcid_7.l2w_325  0.972  0.983  1.247  1.341
+      return SelectLookbackPolicy{
+        512,
+        22,
+        BLOCK_LOAD_DIRECT,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::exponential_backon, 500, 325}};
+    }
+    // 2-byte inputs: the search winner regressed during verification, left untuned
+    if (input_size_bytes == 4)
+    {
+      if (input_type == type_t::float32)
+      {
+        // trp_0.ld_1.ipt_14.tpb_320.ns_140.dcid_1.l2w_805  1.267  0.987  1.299  1.617
+        return SelectLookbackPolicy{
+          320,
+          14,
+          BLOCK_LOAD_DIRECT,
+          LOAD_CA,
+          BLOCK_SCAN_WARP_SCANS,
+          LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 140, 805}};
+      }
+      // trp_1.ld_1.ipt_20.tpb_224.ns_60.dcid_0.l2w_640  0.966  0.967  1.148  1.227
+      return SelectLookbackPolicy{
+        224,
+        20,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_CA,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 60, 640}};
+    }
+    if (input_size_bytes == 8)
+    {
+      if (input_type == type_t::float64)
+      {
+        // trp_1.ld_0.ipt_18.tpb_256.ns_28.dcid_0.l2w_745  0.967  1.008  1.148  1.222
+        return SelectLookbackPolicy{
+          256,
+          18,
+          BLOCK_LOAD_WARP_TRANSPOSE,
+          LOAD_DEFAULT,
+          BLOCK_SCAN_WARP_SCANS,
+          LookbackDelayPolicy{LookbackDelayAlgorithm::no_delay, 28, 745}};
+      }
+      // trp_1.ld_1.ipt_19.tpb_256.ns_20.dcid_1.l2w_1120  0.994  0.960  1.172  1.303
+      return SelectLookbackPolicy{
+        256,
+        19,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_CA,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 20, 1120}};
+    }
+    if (input_size_bytes == 16)
+    {
+      // trp_1.ld_0.ipt_19.tpb_128.ns_52.dcid_1.l2w_1200  0.963  0.982  1.300  1.403
+      return SelectLookbackPolicy{
+        128,
+        19,
+        BLOCK_LOAD_WARP_TRANSPOSE,
+        LOAD_DEFAULT,
+        BLOCK_SCAN_WARP_SCANS,
+        LookbackDelayPolicy{LookbackDelayAlgorithm::fixed_delay, 52, 1200}};
+    }
+
+    return {};
+  }
+
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto get_lookback_policy(::cuda::compute_capability cc) const
+    -> SelectLookbackPolicy
   {
     const bool has_flags    = flag_size_bytes != 0;
     const bool keep_rejects = selection_impl == SelectImpl::Partition;
     const bool may_alias    = selection_impl == SelectImpl::SelectPotentiallyInPlace;
 
-    if (arch >= ::cuda::arch_id::sm_100)
+    if (cc >= ::cuda::compute_capability{10, 7} && cc < ::cuda::compute_capability{11, 0})
+    {
+      if (auto policy_opt = get_sm107_tuning(has_flags, keep_rejects, may_alias))
+      {
+        return *policy_opt;
+      }
+
+      if (!has_flags && keep_rejects)
+      {
+        if (const auto policy_opt = get_sm107_partition_tuning())
+        {
+          return *policy_opt;
+        }
+      }
+
+      if (auto policy_opt = get_sm107_flagged_tuning(has_flags, keep_rejects, may_alias))
+      {
+        return *policy_opt;
+      }
+
+      if (has_flags && keep_rejects)
+      {
+        if (const auto policy_opt = get_sm107_flagged_partition_tuning())
+        {
+          return *policy_opt;
+        }
+      }
+    }
+
+    if (cc >= ::cuda::compute_capability{10, 0})
     {
       if (auto policy_opt = get_sm100_tuning(has_flags, keep_rejects, may_alias))
       {
@@ -2528,23 +3094,29 @@ public:
       }
     }
 
-    if (arch >= ::cuda::arch_id::sm_90)
+    if (cc >= ::cuda::compute_capability{9, 0})
     {
       return get_sm90_tuning(has_flags, keep_rejects);
     }
 
-    if (arch >= ::cuda::arch_id::sm_86)
+    if (cc >= ::cuda::compute_capability{8, 6})
     {
       return default_policy(may_alias ? LOAD_CA : LOAD_LDG);
     }
 
-    if (arch >= ::cuda::arch_id::sm_80)
+    if (cc >= ::cuda::compute_capability{8, 0})
     {
       return get_sm80_tuning(has_flags, keep_rejects);
     }
 
     // fallback policy is for SM50
     return default_policy(may_alias ? LOAD_CA : LOAD_LDG);
+  }
+
+public:
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto operator()(::cuda::compute_capability cc) const -> SelectPolicy
+  {
+    return SelectPolicy{SelectAlgorithm::lookback, get_lookback_policy(cc)};
   }
 };
 
@@ -2555,7 +3127,7 @@ template <typename InputIteratorT,
           SelectImpl SelectionOpt>
 struct policy_selector_from_types
 {
-  [[nodiscard]] _CCCL_API constexpr auto operator()(::cuda::arch_id arch) const -> select_if_policy
+  [[nodiscard]] _CCCL_HOST_DEVICE_API constexpr auto operator()(::cuda::compute_capability cc) const -> SelectPolicy
   {
     using input_t = it_value_t<InputIteratorT>;
     using flag_t  = it_value_t<FlagsInputIteratorT>;
@@ -2566,7 +3138,7 @@ struct policy_selector_from_types
       ::cuda::std::is_same_v<flag_t, NullType> ? 0 : sizeof(flag_t),
       SelectionOpt == SelectImpl::Partition ? sizeof(OffsetT) : sizeof(::cuda::std::int32_t),
       is_partition_distinct_output_t<SelectedOutputIteratorT>::value,
-      SelectionOpt}(arch);
+      SelectionOpt}(cc);
   }
 };
 

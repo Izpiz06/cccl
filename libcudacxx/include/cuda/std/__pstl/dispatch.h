@@ -22,7 +22,7 @@
 #endif // no system header
 
 #include <cuda/std/__execution/policy.h>
-#include <cuda/std/__type_traits/always_false.h>
+#include <cuda/std/__fwd/execution_policy.h>
 #include <cuda/std/__type_traits/is_base_of.h>
 #include <cuda/std/cstdint>
 
@@ -35,21 +35,29 @@ enum class __pstl_algorithm
   __adjacent_difference,
   __copy_if,
   __copy_n,
+  __mdspan_copy,
   __exclusive_scan,
   __find_if,
   __for_each_n,
   __generate_n,
   __inclusive_scan,
+  __max_element,
   __merge,
+  __min_element,
   __partition,
   __partition_copy,
   __reduce,
   __remove_if,
   __rotate,
   __rotate_copy,
+  __shift_left,
+  __shift_right,
+  __stable_partition,
+  __sort,
   __transform,
   __transform_reduce,
   __unique,
+  __unique_copy,
 };
 
 //! @brief tag type to indicate that we cannot dispatch to a parallel algorithm and should run the algorithm serially

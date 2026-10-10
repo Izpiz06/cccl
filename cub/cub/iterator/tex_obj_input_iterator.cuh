@@ -25,13 +25,10 @@
 
 #include <thrust/iterator/iterator_facade.h>
 
+#include <cuda/std/__host_stdlib/ostream>
 #include <cuda/std/__type_traits/remove_cv.h>
 
 #include <nv/target>
-
-#if !_CCCL_COMPILER(NVRTC)
-#  include <ostream>
-#endif // !_CCCL_COMPILER(NVRTC)
 
 CUB_NAMESPACE_BEGIN
 
@@ -122,6 +119,7 @@ private:
   using TextureWord = typename UnitWord<T>::TextureWord;
 
   // Number of texture words per T
+  // NOLINTNEXTLINE(bugprone-sizeof-expression)
   static constexpr int TEXTURE_MULTIPLE = sizeof(T) / sizeof(TextureWord);
 
 private:
@@ -133,7 +131,7 @@ public:
   /// Constructor
   _CCCL_FORCEINLINE TexObjInputIterator() = default;
 
-#if !_CCCL_COMPILER(NVRTC)
+#if _CCCL_HOSTED()
   /**
    * @brief Use this iterator to bind @p ptr with a texture reference
    *
@@ -152,11 +150,9 @@ public:
     this->ptr        = const_cast<::cuda::std::remove_cv_t<QualifiedT>*>(ptr);
     this->tex_offset = static_cast<difference_type>(tex_offset);
 
-    cudaChannelFormatDesc channel_desc = cudaCreateChannelDesc<TextureWord>();
-    cudaResourceDesc res_desc;
-    cudaTextureDesc tex_desc;
-    memset(&res_desc, 0, sizeof(cudaResourceDesc));
-    memset(&tex_desc, 0, sizeof(cudaTextureDesc));
+    const cudaChannelFormatDesc channel_desc = cudaCreateChannelDesc<TextureWord>();
+    cudaResourceDesc res_desc{};
+    cudaTextureDesc tex_desc{};
     res_desc.resType                = cudaResourceTypeLinear;
     res_desc.res.linear.devPtr      = this->ptr;
     res_desc.res.linear.desc        = channel_desc;
@@ -170,7 +166,7 @@ public:
   {
     return CubDebug(cudaDestroyTextureObject(tex_obj));
   }
-#endif // !_CCCL_COMPILER(NVRTC)
+#endif // _CCCL_HOSTED()
 
   /// Postfix increment
   _CCCL_HOST_DEVICE _CCCL_FORCEINLINE self_type operator++(int)
@@ -190,7 +186,7 @@ public:
   /// Indirection
   _CCCL_HOST_DEVICE _CCCL_FORCEINLINE reference operator*() const
   {
-    NV_IF_TARGET(NV_IS_HOST, (return ptr[tex_offset];), (return this->device_deref();));
+    NV_IF_ELSE_TARGET(NV_IS_HOST, (return ptr[tex_offset];), (return this->device_deref();));
   }
 
   /// Addition
@@ -241,7 +237,7 @@ public:
   template <typename Distance>
   _CCCL_HOST_DEVICE _CCCL_FORCEINLINE reference operator[](Distance n) const
   {
-    self_type offset = (*this) + n;
+    const self_type offset = (*this) + n;
     return *offset;
   }
 
@@ -263,7 +259,7 @@ public:
     return ((ptr != rhs.ptr) || (tex_offset != rhs.tex_offset) || (tex_obj != rhs.tex_obj));
   }
 
-#if !_CCCL_COMPILER(NVRTC)
+#if _CCCL_HOSTED()
   /// ostream operator
   friend ::std::ostream& operator<<(::std::ostream& os, const self_type& itr)
   {
@@ -271,7 +267,7 @@ public:
        << " )";
     return os;
   }
-#endif // !_CCCL_COMPILER(NVRTC)
+#endif // _CCCL_HOSTED()
 
 private:
   // This is hoisted out of operator* because #pragma can't be used inside of

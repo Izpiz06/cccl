@@ -26,15 +26,16 @@
 #  include <cuda/std/__complex/complex.h>
 #  include <cuda/std/__complex/tuple.h>
 #  include <cuda/std/__complex/vector_support.h>
+#  include <cuda/std/__cstddef/types.h>
 #  include <cuda/std/__floating_point/cuda_fp_types.h>
-#  include <cuda/std/__fwd/get.h>
 #  include <cuda/std/__type_traits/enable_if.h>
 #  include <cuda/std/__type_traits/is_constructible.h>
+#  include <cuda/std/__utility/move.h>
 
 // todo: find a way to get rid of this include
-#  if !_CCCL_COMPILER(NVRTC)
+#  if _CCCL_HOSTED()
 #    include <complex> // for std::complex stream operators
-#  endif // !_CCCL_COMPILER(NVRTC)
+#  endif // _CCCL_HOSTED()
 
 #  include <cuda/std/__cccl/prologue.h>
 
@@ -72,22 +73,38 @@ template <>
 inline constexpr size_t __complex_alignment_v<__nv_bfloat16> = alignof(__nv_bfloat162);
 
 template <>
-struct __type_to_vector<__nv_bfloat16>
-{
-  using __type = __nv_bfloat162;
-};
-
-template <>
 struct __cccl_complex_overload_traits<__nv_bfloat16, false, false>
 {
   using _ValueType   = __nv_bfloat16;
   using _ComplexType = complex<__nv_bfloat16>;
 };
 
+#  if _CCCL_TILE_COMPILATION()
+struct _CCCL_TYPE_VISIBILITY_DEFAULT _CCCL_ALIGNAS(alignof(__nv_bfloat162)) __complex_fake_nv_bfloat162
+{
+  _CCCL_HIDE_FROM_ABI __complex_fake_nv_bfloat162() noexcept = default;
+  _CCCL_API __complex_fake_nv_bfloat162(__nv_bfloat16 x, __nv_bfloat16 y) noexcept
+      : x(x)
+      , y(y)
+  {}
+  __nv_bfloat16 x;
+  __nv_bfloat16 y;
+};
+using __complex_nv_bfloat_repr_t = __complex_fake_nv_bfloat162;
+#  else // ^^^ _CCCL_TILE_COMPILATION() ^^^ / vvv !_CCCL_TILE_COMPILATION()
+template <>
+struct __type_to_vector<__nv_bfloat16>
+{
+  using __type = __nv_bfloat162;
+};
+
+using __complex_nv_bfloat_repr_t = __nv_bfloat162;
+#  endif // !_CCCL_TILE_COMPILATION()
+
 template <>
 class _CCCL_TYPE_VISIBILITY_DEFAULT _CCCL_ALIGNAS(alignof(__nv_bfloat162)) complex<__nv_bfloat16>
 {
-  __nv_bfloat162 __repr_;
+  __complex_nv_bfloat_repr_t __repr_;
 
   template <class _Up>
   friend class complex;
@@ -119,11 +136,15 @@ public:
   {}
 
 #  if !_CCCL_COMPILER(GCC, <, 10) // Old GCC considers those as deleted
+  _CCCL_EXEC_CHECK_DISABLE
   _CCCL_HIDE_FROM_ABI complex(const complex&) noexcept = default;
-  _CCCL_HIDE_FROM_ABI complex(complex&&) noexcept      = default;
+  _CCCL_EXEC_CHECK_DISABLE
+  _CCCL_HIDE_FROM_ABI complex(complex&&) noexcept = default;
 
+  _CCCL_EXEC_CHECK_DISABLE
   _CCCL_HIDE_FROM_ABI complex& operator=(const complex&) noexcept = default;
-  _CCCL_HIDE_FROM_ABI complex& operator=(complex&&) noexcept      = default;
+  _CCCL_EXEC_CHECK_DISABLE
+  _CCCL_HIDE_FROM_ABI complex& operator=(complex&&) noexcept = default;
 #  endif // !_CCCL_COMPILER(GCC, <, 10)
 
   template <class _Up, enable_if_t<__cccl_internal::__is_non_narrowing_convertible<value_type, _Up>::value, int> = 0>
@@ -153,7 +174,7 @@ public:
     return *this;
   }
 
-#  if !_CCCL_COMPILER(NVRTC)
+#  if _CCCL_HOSTED()
   template <class _Up>
   _CCCL_API inline complex(const ::std::complex<_Up>& __other) noexcept
       : __repr_(_LIBCUDACXX_ACCESS_STD_COMPLEX_REAL(__other), _LIBCUDACXX_ACCESS_STD_COMPLEX_IMAG(__other))
@@ -171,7 +192,7 @@ public:
   {
     return {__repr_.x, __repr_.y};
   }
-#  endif // !_CCCL_COMPILER(NVRTC)
+#  endif // _CCCL_HOSTED()
 
   [[nodiscard]] _CCCL_API inline value_type real() const
   {
@@ -227,19 +248,33 @@ public:
   // We can utilize vectorized operations for those operators
   _CCCL_API inline friend complex& operator+=(complex& __lhs, const complex& __rhs) noexcept
   {
+#  if _CCCL_TILE_COMPILATION()
+    __lhs.__repr_.x = ::__hadd(__lhs.__repr_.x, __rhs.__repr_.x);
+    __lhs.__repr_.y = ::__hadd(__lhs.__repr_.y, __rhs.__repr_.y);
+#  else // ^^^ _CCCL_TILE_COMPILATION() ^^^ / vvv !_CCCL_TILE_COMPILATION()
     __lhs.__repr_ = ::__hadd2(__lhs.__repr_, __rhs.__repr_);
+#  endif // !_CCCL_TILE_COMPILATION()
     return __lhs;
   }
 
   _CCCL_API inline friend complex& operator-=(complex& __lhs, const complex& __rhs) noexcept
   {
+#  if _CCCL_TILE_COMPILATION()
+    __lhs.__repr_.x = ::__hsub(__lhs.__repr_.x, __rhs.__repr_.x);
+    __lhs.__repr_.y = ::__hsub(__lhs.__repr_.y, __rhs.__repr_.y);
+#  else // ^^^ _CCCL_TILE_COMPILATION() ^^^ / vvv !_CCCL_TILE_COMPILATION()
     __lhs.__repr_ = ::__hsub2(__lhs.__repr_, __rhs.__repr_);
+#  endif // !_CCCL_TILE_COMPILATION()
     return __lhs;
   }
 
   [[nodiscard]] _CCCL_API inline friend bool operator==(const complex& __lhs, const complex& __rhs) noexcept
   {
+#  if _CCCL_TILE_COMPILATION()
+    return ::__heq(__lhs.__repr_.x, __rhs.__repr_.x) && ::__heq(__lhs.__repr_.y, __rhs.__repr_.y);
+#  else // ^^^ _CCCL_TILE_COMPILATION() ^^^ / vvv !_CCCL_TILE_COMPILATION()
     return ::__hbeq2(__lhs.__repr_, __rhs.__repr_);
+#  endif // !_CCCL_TILE_COMPILATION()
   }
 };
 
@@ -303,7 +338,7 @@ struct __get_complex_impl<__nv_bfloat16>
   }
 };
 
-#  if !_CCCL_COMPILER(NVRTC)
+#  if _CCCL_HOSTED()
 template <class _CharT, class _Traits>
 ::std::basic_istream<_CharT, _Traits>&
 operator>>(::std::basic_istream<_CharT, _Traits>& __is, complex<__nv_bfloat16>& __x)
@@ -320,7 +355,7 @@ operator<<(::std::basic_ostream<_CharT, _Traits>& __os, const complex<__nv_bfloa
 {
   return __os << complex<float>{__x};
 }
-#  endif // !_CCCL_COMPILER(NVRTC)
+#  endif // _CCCL_HOSTED()
 
 _CCCL_END_NAMESPACE_CUDA_STD
 

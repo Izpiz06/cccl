@@ -67,7 +67,7 @@ void test_merge(const Policy& policy,
       out.begin(),
       ::cuda::std::greater<int>{});
     CHECK(res == out.begin() + size2);
-    CHECK(thrust::equal(out.begin(), res, in2.begin()));
+    CHECK(cuda::std::equal(policy, out.begin(), res, in2.begin()));
   }
 
   cuda::std::fill(policy, out.begin(), out.end(), -1);
@@ -81,7 +81,7 @@ void test_merge(const Policy& policy,
       out.begin(),
       ::cuda::std::greater<int>{});
     CHECK(res == out.begin() + size1);
-    CHECK(thrust::equal(out.begin(), res, in1.begin()));
+    CHECK(cuda::std::equal(policy, out.begin(), res, in1.begin()));
   }
 
   cuda::std::fill(policy, out.begin(), out.end(), -1);
@@ -94,8 +94,9 @@ void test_merge(const Policy& policy,
     // First subrange is equal to [2 * size1 - 2, 2 * size1 - 4, ..., 2 * size2)
     // The rest is equal [2 * size2 - 1, 2 * size2 - 1, ..., 0)
     const auto mid = out.begin() + (size1 - size2);
-    CHECK(thrust::equal(out.begin(), mid, cuda::strided_iterator{cuda::counting_iterator{2 * size1 - 2}, -2}));
-    CHECK(thrust::equal(mid, out.end(), cuda::strided_iterator{cuda::counting_iterator{2 * size2 - 1}, -1}));
+    CHECK(
+      cuda::std::equal(policy, out.begin(), mid, cuda::strided_iterator{cuda::counting_iterator{2 * size1 - 2}, -2}));
+    CHECK(cuda::std::equal(policy, mid, out.end(), cuda::strided_iterator{cuda::counting_iterator{2 * size2 - 1}, -1}));
   }
 
   cuda::std::fill(policy, out.begin(), out.end(), -1);
@@ -109,8 +110,9 @@ void test_merge(const Policy& policy,
     // First subrange is equal to [2 * size1 - 2, 2 * size1 - 4, ..., 2 * size2)
     // The rest is equal [2 * size2 - 1, 2 * size2 - 1, ..., 0)
     const auto mid = out.begin() + (size1 - size2);
-    CHECK(thrust::equal(out.begin(), mid, cuda::strided_iterator{cuda::counting_iterator{2 * size1 - 2}, -2}));
-    CHECK(thrust::equal(mid, out.end(), cuda::strided_iterator{cuda::counting_iterator{2 * size2 - 1}, -1}));
+    CHECK(
+      cuda::std::equal(policy, out.begin(), mid, cuda::strided_iterator{cuda::counting_iterator{2 * size1 - 2}, -2}));
+    CHECK(cuda::std::equal(policy, mid, out.end(), cuda::strided_iterator{cuda::counting_iterator{2 * size2 - 1}, -1}));
   }
 
   cuda::std::fill(policy, out.begin(), out.end(), -1);
@@ -124,8 +126,9 @@ void test_merge(const Policy& policy,
     // First subrange is equal to [2 * size1 - 2, 2 * size1 - 4, ..., 2 * size2)
     // The rest is equal [2 * size2 - 1, 2 * size2 - 1, ..., 0)
     const auto mid = out.begin() + (size1 - size2);
-    CHECK(thrust::equal(out.begin(), mid, cuda::strided_iterator{cuda::counting_iterator{2 * size1 - 2}, -2}));
-    CHECK(thrust::equal(mid, out.end(), cuda::strided_iterator{cuda::counting_iterator{2 * size2 - 1}, -1}));
+    CHECK(
+      cuda::std::equal(policy, out.begin(), mid, cuda::strided_iterator{cuda::counting_iterator{2 * size1 - 2}, -2}));
+    CHECK(cuda::std::equal(policy, mid, out.end(), cuda::strided_iterator{cuda::counting_iterator{2 * size2 - 1}, -1}));
   }
 }
 
@@ -135,8 +138,10 @@ C2H_TEST("cuda::std::merge", "[parallel algorithm]")
   thrust::device_vector<int> in2(size2, thrust::no_init);
   thrust::device_vector<int> out(size1 + size2, thrust::no_init);
 
-  cuda::strided_iterator iter1{cuda::counting_iterator{2 * size1 - 2}, -2}; // [2 * size1 - 2, 2 * size1 - 4,..., 0]
-  cuda::strided_iterator iter2{cuda::counting_iterator{2 * size2 - 1}, -2}; // [2 * size2 - 1, 2 * size2 - 3,..., 1]
+  const cuda::strided_iterator iter1{cuda::counting_iterator{2 * size1 - 2}, -2}; // [2 * size1 - 2, 2 * size1 - 4,...,
+                                                                                  // 0]
+  const cuda::strided_iterator iter2{cuda::counting_iterator{2 * size2 - 1}, -2}; // [2 * size2 - 1, 2 * size2 - 3,...,
+                                                                                  // 1]
   cuda::std::copy_n(cuda::execution::gpu, iter1, size1, in1.begin());
   cuda::std::copy_n(cuda::execution::gpu, iter2, size2, in2.begin());
 
@@ -148,7 +153,7 @@ C2H_TEST("cuda::std::merge", "[parallel algorithm]")
 
   SECTION("with provided stream")
   {
-    cuda::stream stream{cuda::device_ref{0}};
+    const cuda::stream stream{cuda::device_ref{0}};
     const auto policy = cuda::execution::gpu.with(cuda::get_stream, stream);
     test_merge(policy, in1, in2, out);
   }
@@ -162,7 +167,7 @@ C2H_TEST("cuda::std::merge", "[parallel algorithm]")
 
   SECTION("with provided stream and memory_resource")
   {
-    cuda::stream stream{cuda::device_ref{0}};
+    const cuda::stream stream{cuda::device_ref{0}};
     cuda::device_memory_pool_ref device_resource = cuda::device_default_memory_pool(stream.device());
     const auto policy =
       cuda::execution::gpu.with(cuda::mr::get_memory_resource, device_resource).with(cuda::get_stream, stream);

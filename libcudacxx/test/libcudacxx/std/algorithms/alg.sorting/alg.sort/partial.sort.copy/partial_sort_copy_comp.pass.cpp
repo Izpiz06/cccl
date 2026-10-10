@@ -8,6 +8,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+// CONSTEXPR_STEPS: 20000000
+
 // <algorithm>
 
 // template<InputIterator InIter, RandomAccessIterator RAIter, class Compare>
@@ -29,6 +31,7 @@
 #include "test_iterators.h"
 #include "test_macros.h"
 
+_CCCL_EXEC_CHECK_DISABLE
 template <class T, class Iter, class OutIter>
 TEST_FUNC constexpr void test()
 {
@@ -74,6 +77,7 @@ TEST_FUNC constexpr void test()
   }
 }
 
+_CCCL_EXEC_CHECK_DISABLE
 TEST_FUNC constexpr bool test()
 {
   int i = 42;
@@ -98,6 +102,13 @@ TEST_FUNC constexpr bool test()
     test<MoveOnly, int*, random_access_iterator<MoveOnly*>>();
     test<MoveOnly, int*, MoveOnly*>();
   }
+
+#if !TEST_COMPILER(NVRTC)
+  NV_IF_TARGET(NV_IS_HOST, (test<int, host_only_iterator<int*>, host_only_iterator<int*>>();))
+#endif // !TEST_COMPILER(NVRTC)
+#if TEST_CUDA_COMPILATION() && !defined(CCCL_FORCE_TILE_TESTS)
+  NV_IF_TARGET(NV_IS_DEVICE, (test<int, device_only_iterator<int*>, device_only_iterator<int*>>();))
+#endif // TEST_CUDA_COMPILATION() && !CCCL_FORCE_TILE_TESTS
 
   return true;
 }

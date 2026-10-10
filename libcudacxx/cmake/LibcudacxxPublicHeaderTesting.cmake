@@ -14,12 +14,13 @@ file(
   RELATIVE "${libcudacxx_SOURCE_DIR}/include"
   CONFIGURE_DEPENDS
   "${libcudacxx_SOURCE_DIR}/include/cuda/*"
+  "${libcudacxx_SOURCE_DIR}/include/cuda/ptxs/*"
   "${libcudacxx_SOURCE_DIR}/include/cuda/std/*"
 )
 
 # annotated_ptr does not work with clang cuda due to __nv_associate_access_property
 if ("Clang" STREQUAL "${CMAKE_CUDA_COMPILER_ID}")
-  list(FILTER public_headers EXCLUDE REGEX "annotated_ptr")
+  list(REMOVE_ITEM public_headers "annotated_ptr")
 endif()
 
 function(libcudacxx_add_public_header_test_target target_name)
